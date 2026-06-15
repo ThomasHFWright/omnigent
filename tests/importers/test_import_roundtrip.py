@@ -26,6 +26,7 @@ def test_claude_roundtrip(
     conversation_id = import_transcript(
         conversation_store, adapter, fixtures_dir / "claude_code_session.jsonl"
     )
+    assert conversation_id is not None
 
     conversation = conversation_store.get_conversation(conversation_id)
     assert conversation is not None
@@ -61,6 +62,7 @@ def test_codex_roundtrip(
     conversation_id = import_transcript(
         conversation_store, adapter, fixtures_dir / "codex_session.jsonl"
     )
+    assert conversation_id is not None
 
     conversation = conversation_store.get_conversation(conversation_id)
     assert conversation is not None
@@ -101,3 +103,36 @@ def test_import_all_discovers_and_imports(
         conversation = conversation_store.get_conversation(conversation_id)
         assert conversation is not None
         assert conversation.labels.get(IMPORTED_FROM_LABEL_KEY) == "claude_code"
+
+
+def test_import_transcript_skips_empty_file(
+    conversation_store: SqlAlchemyConversationStore,
+    tmp_path: Path,
+) -> None:
+    """An empty transcript parses to zero items and is skipped — no empty
+    conversation is created."""
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("", encoding="utf-8")
+
+    result = import_transcript(conversation_store, ClaudeCodeAdapter(), empty)
+
+    assert result is None
+    assert conversation_store.list_conversations(limit=10).data == []
+
+
+def test_import_all_skips_empty_and_garbage(
+    conversation_store: SqlAlchemyConversationStore,
+    fixtures_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """``import_all`` imports only the transcripts that yield items; empty and
+    unparseable files are skipped."""
+    root = tmp_path / "projects" / "encoded"
+    root.mkdir(parents=True)
+    shutil.copy(fixtures_dir / "claude_code_session.jsonl", root / "good.jsonl")
+    (root / "empty.jsonl").write_text("", encoding="utf-8")
+    (root / "garbage.jsonl").write_text("not json\n{also not valid\n", encoding="utf-8")
+
+    ids = import_all(conversation_store, ClaudeCodeAdapter(), tmp_path)
+
+    assert len(ids) == 1

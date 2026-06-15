@@ -34,7 +34,7 @@ from omnigent.importers.base import (
     ResponseGrouper,
     TranscriptAdapter,
     TranscriptRef,
-    epoch_from_iso8601,
+    earliest_timestamp,
     title_from_first_user_message,
 )
 
@@ -88,7 +88,7 @@ class ClaudeCodeAdapter(TranscriptAdapter):
             model=model,
             cwd=_first_str(records, "cwd"),
             git_branch=_first_str(records, "gitBranch"),
-            created_at=_earliest_timestamp(records),
+            created_at=earliest_timestamp(records),
         )
 
 
@@ -364,17 +364,3 @@ def _first_str(records: list[dict[str, object]], key: str) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
-
-
-def _earliest_timestamp(records: list[dict[str, object]]) -> int | None:
-    """Return the earliest record timestamp as Unix epoch seconds.
-
-    :param records: Decoded transcript records.
-    :returns: The minimum parseable timestamp, or ``None`` when none parse.
-    """
-    epochs = [
-        epoch
-        for record in records
-        if (epoch := epoch_from_iso8601(record.get("timestamp"))) is not None
-    ]
-    return min(epochs) if epochs else None

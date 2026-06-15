@@ -34,7 +34,7 @@ from omnigent.importers.base import (
     ResponseGrouper,
     TranscriptAdapter,
     TranscriptRef,
-    epoch_from_iso8601,
+    earliest_timestamp,
     title_from_first_user_message,
 )
 
@@ -99,7 +99,10 @@ class CodexAdapter(TranscriptAdapter):
             model=model,
             cwd=_str_field(meta, "cwd"),
             git_branch=git_branch if isinstance(git_branch, str) and git_branch else None,
-            created_at=epoch_from_iso8601(meta.get("timestamp")),
+            # The canonical per-record timestamp lives on the top-level envelope,
+            # not inside the session_meta payload (which may omit it), so scan all
+            # records for the earliest rather than reading meta["timestamp"].
+            created_at=earliest_timestamp(records),
         )
 
 

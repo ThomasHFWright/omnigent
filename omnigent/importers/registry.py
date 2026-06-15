@@ -85,15 +85,21 @@ def import_transcript(
     store: ConversationStore,
     adapter: TranscriptAdapter,
     path: Path,
-) -> str:
+) -> str | None:
     """Parse one transcript file and persist it as a conversation.
+
+    A transcript that parses to zero items (empty or unrecognized file) is
+    skipped rather than persisted as an empty conversation.
 
     :param store: Destination conversation store.
     :param adapter: The harness adapter to parse with.
     :param path: Path to a single transcript file.
-    :returns: The new conversation id.
+    :returns: The new conversation id, or ``None`` when the transcript held no
+        importable items.
     """
     parsed = adapter.parse(path)
+    if not parsed.items:
+        return None
     return persist_transcript(store, adapter.harness_name, parsed)
 
 
@@ -104,9 +110,14 @@ def import_all(
 ) -> list[str]:
     """Discover and import every top-level transcript under *root*.
 
+    Transcripts that parse to zero items are skipped (see
+    :func:`import_transcript`), so the returned list may be shorter than the
+    number of discovered files.
+
     :param store: Destination conversation store.
     :param adapter: The harness adapter to discover + parse with.
     :param root: Directory to scan.
     :returns: The new conversation ids, in discovery order.
     """
-    return [import_transcript(store, adapter, ref.path) for ref in adapter.discover(root)]
+    ids = [import_transcript(store, adapter, ref.path) for ref in adapter.discover(root)]
+    return [conversation_id for conversation_id in ids if conversation_id is not None]

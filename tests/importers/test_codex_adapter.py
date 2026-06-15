@@ -11,6 +11,7 @@ from omnigent.entities import (
     MessageData,
     ReasoningData,
 )
+from omnigent.importers.base import epoch_from_iso8601
 from omnigent.importers.codex import CodexAdapter
 
 
@@ -121,6 +122,45 @@ def test_metadata(fixtures_dir: Path) -> None:
     assert parsed.git_branch == "main"
     assert parsed.title == "Refactor the parser"
     assert parsed.created_at is not None
+
+
+def test_created_at_from_envelope_when_meta_payload_lacks_timestamp(tmp_path: Path) -> None:
+    """Regression: ``created_at`` is the earliest top-level envelope timestamp
+    across all records, even when the ``session_meta`` payload omits one.
+
+    Real Codex rollouts carry the canonical timestamp on the record envelope;
+    the ``session_meta`` payload may not. Reading only the payload would lose
+    the earliest transcript time (``created_at`` would be ``None``). Here the
+    earliest timestamp sits on the ``turn_context`` envelope to prove the scan
+    covers every record, not just ``session_meta``."""
+    records = [
+        {
+            "timestamp": "2026-05-20T01:14:44.054Z",
+            "type": "session_meta",
+            "payload": {"id": "sess-1", "cwd": "/w"},  # note: no payload timestamp
+        },
+        {
+            "timestamp": "2026-05-20T01:14:40.000Z",  # earliest, and not on session_meta
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.5"},
+        },
+        {
+            "timestamp": "2026-05-20T01:14:45.000Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            },
+        },
+    ]
+    path = tmp_path / "rollout-2026-05-20T01-14-44-sess-1.jsonl"
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+    parsed = CodexAdapter().parse(path)
+
+    assert parsed.created_at is not None
+    assert parsed.created_at == epoch_from_iso8601("2026-05-20T01:14:40.000Z")
 
 
 def test_discover_extracts_session_uuid(tmp_path: Path) -> None:

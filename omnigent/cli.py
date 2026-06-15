@@ -8217,8 +8217,13 @@ def import_chats(
     store = SqlAlchemyConversationStore(db_uri)
 
     imported = 0
+    skipped = 0
     for path in paths:
         parsed = adapter.parse(path)
+        if not parsed.items:
+            skipped += 1
+            click.echo(f"Skipped {path}: no importable conversation items.", err=True)
+            continue
         conversation_id = persist_transcript(store, adapter.harness_name, parsed)
         imported += 1
         when = (
@@ -8230,7 +8235,10 @@ def import_chats(
         )
         click.echo(f"{conversation_id}  [{when}]  {parsed.title or '(untitled)'}")
 
-    click.echo(f"Imported {imported} {harness} conversation(s) into {db_uri}.")
+    summary = f"Imported {imported} {harness} conversation(s) into {db_uri}."
+    if skipped:
+        summary += f" Skipped {skipped} empty transcript(s)."
+    click.echo(summary)
 
 
 @cli.group("debug")

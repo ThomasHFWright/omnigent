@@ -192,6 +192,27 @@ def title_from_first_user_message(items: list[NewConversationItem]) -> str | Non
     return None
 
 
+def earliest_timestamp(records: list[dict[str, object]]) -> int | None:
+    """Return the earliest top-level ``timestamp`` across *records* as Unix
+    epoch seconds.
+
+    Both harnesses put the canonical per-record timestamp on the top-level
+    envelope (Claude Code's transcript records and Codex's ``{timestamp, type,
+    payload}`` envelopes), so a single scan of the decoded records yields the
+    earliest transcript time regardless of harness.
+
+    :param records: Decoded transcript records, each potentially carrying a
+        top-level ``"timestamp"`` ISO-8601 string.
+    :returns: The minimum parseable timestamp, or ``None`` when none parse.
+    """
+    epochs = [
+        epoch
+        for record in records
+        if (epoch := epoch_from_iso8601(record.get("timestamp"))) is not None
+    ]
+    return min(epochs) if epochs else None
+
+
 def epoch_from_iso8601(value: object) -> int | None:
     """Convert an ISO-8601 timestamp string to Unix epoch seconds.
 
