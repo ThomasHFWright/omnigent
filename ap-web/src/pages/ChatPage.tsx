@@ -1967,7 +1967,7 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
       {/* w-fit + ml-auto shrink-wrap the row so the author avatar sits
           immediately left of the right-aligned bubble (the bubble's own
           ml-auto has no free space to absorb inside a fit-width row). */}
-      <div className="ml-auto flex w-fit max-w-full items-start gap-1.5">
+      <div className="ml-auto flex w-fit max-w-full items-center gap-1.5">
         {showAuthorBadge && author && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1975,7 +1975,7 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
                 size="sm"
                 data-testid="message-author"
                 aria-label={author}
-                className="mt-1.5 shrink-0"
+                className="shrink-0"
               >
                 <AvatarFallback
                   className="font-medium text-white"
