@@ -1,19 +1,13 @@
 """Agent Client Protocol (ACP) client for ``cursor-agent acp``.
 
-``cursor-agent acp`` runs Cursor's agent as an ACP server: a JSON-RPC 2.0 peer
-speaking newline-delimited JSON over stdio. A session stays open across turns,
-so the harness drives it turn by turn rather than respawning the CLI.
+``cursor-agent acp`` runs Cursor's agent as a JSON-RPC 2.0 server over stdio
+(newline-delimited JSON), kept open across turns so the harness drives it turn
+by turn instead of respawning the CLI.
 
-Covers what the harness needs: ``initialize`` → ``session/new`` (with cwd,
-model, MCP servers) → ``session/prompt`` (streaming ``session/update``
-notifications) → ``session/cancel``. Responses are correlated by JSON-RPC id;
-``session/update`` notifications are queued for the active prompt; server→client
-requests are auto-replied (permission requests auto-allowed, anything else a
-null result) so the server never blocks.
-
-``session/new`` accepts ``{cwd, model, mcpServers}`` and echoes the resolved
-model; ``session/prompt`` returns ``{stopReason}`` at end of turn and streams
-``agent_message_chunk`` / ``agent_thought_chunk`` / ``tool_call`` updates.
+Implements ``initialize`` → ``session/new`` → ``session/prompt`` (streaming
+``session/update``) → ``session/cancel``. Responses correlate by JSON-RPC id;
+updates queue for the active prompt; server→client requests are auto-replied
+(permissions auto-allowed, else a null result) so the server never blocks.
 """
 
 from __future__ import annotations
@@ -30,37 +24,30 @@ from ._subprocess_lifecycle import close_subprocess_transport
 
 logger = logging.getLogger(__name__)
 
-# One ACP JSON-RPC message (request / response / notification). The schema is
-# owned by the ACP spec + cursor-agent, so it is opaque JSON at this layer.
+# One ACP JSON-RPC message; opaque JSON owned by the ACP spec / cursor-agent.
 AcpMessage: TypeAlias = dict[str, Any]  # type: ignore[explicit-any]
 
-# ACP protocol revision this client negotiates (integer, per the ACP spec).
+# ACP protocol revision this client negotiates.
 _ACP_PROTOCOL_VERSION = 1
 
-# Read stdout in 64 KiB chunks and split on newlines ourselves so a single
-# large notification line (e.g. a big tool result) can't overflow
-# ``StreamReader.readline``'s 64 KiB cap — same robustness as the pi/cursor
-# stream readers.
+# Split stdout on newlines ourselves (vs ``StreamReader.readline``'s 64 KiB cap)
+# so a single large notification line can't overflow the read.
 _STREAM_READ_CHUNK_SIZE = 65536
 
-# Default per-request timeout. A single ``session/prompt`` can run the whole
-# agent turn (tool loop, long generation), so it is generous.
+# Per-request timeout, generous because one ``session/prompt`` runs a whole turn.
 _REQUEST_TIMEOUT_SECONDS = 600.0
 
-# Tighter timeout for session-setup calls (``initialize`` / ``session/new``).
-# These resolve in well under a second on a healthy server, so the generous
-# turn budget above would only serve to hang the first turn for ten minutes
-# when cursor-agent spawns but never speaks ACP (wrong binary, stuck auth,
-# blocked network) — surface that as a fast, clear failure instead.
+# Tighter timeout for setup calls (``initialize`` / ``session/new``), which
+# resolve in well under a second — so a cursor-agent that spawns but never
+# speaks ACP (wrong binary, stuck auth, blocked network) fails fast.
 _SETUP_TIMEOUT_SECONDS = 30.0
 
 
 async def _create_subprocess_exec(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:  # type: ignore[explicit-any]
     """Indirection point for ``asyncio.create_subprocess_exec`` (test seam).
 
-    Mirrors the seam in the pi / cursor executors so tests can stub
-    subprocess creation by patching ``omnigent.inner.cursor_acp._create_subprocess_exec``
-    without touching the global ``asyncio`` singleton.
+    Lets tests stub subprocess creation by patching this function instead of
+    the global ``asyncio`` singleton (mirrors the pi / codex executors).
     """
     return await asyncio.create_subprocess_exec(*args, **kwargs)
 
@@ -129,8 +116,7 @@ class AcpClient:
             "initialize",
             {
                 "protocolVersion": _ACP_PROTOCOL_VERSION,
-                # We do not expose host filesystem capabilities to the agent;
-                # cursor-agent uses its own native file tools in its cwd.
+                # No host fs capabilities; cursor-agent uses its own file tools.
                 "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}},
             },
             timeout=_SETUP_TIMEOUT_SECONDS,
@@ -175,8 +161,7 @@ class AcpClient:
         :param blocks: ACP prompt content blocks, e.g.
             ``[{"type": "text", "text": "..."}]``.
         """
-        # Drain any stray notifications left over from a prior turn (idle
-        # ``available_commands_update`` etc.) so they aren't misattributed.
+        # Drain stray notifications from a prior turn so they aren't misattributed.
         while not self._notifications.empty():
             self._notifications.get_nowait()
 
@@ -193,8 +178,7 @@ class AcpClient:
                 if getter in done:
                     yield ("update", getter.result())
                     continue
-                # The prompt response landed; surface any already-queued updates
-                # before the terminal item, then stop.
+                # Prompt response landed; flush queued updates before the terminal item.
                 getter.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await getter
@@ -204,9 +188,8 @@ class AcpClient:
                 try:
                     resp = fut.result()
                 except asyncio.CancelledError:
-                    # ``close()`` cancelled the in-flight prompt (an interrupt
-                    # tore the session down). Treat that as a clean end of turn
-                    # rather than letting CancelledError escape as an error.
+                    # ``close()`` cancelled the prompt (interrupt tore the session
+                    # down) — treat as a clean end of turn, not an error.
                     return
                 if "error" in resp:
                     yield ("error", resp["error"])
@@ -215,9 +198,8 @@ class AcpClient:
                     yield ("result", result if isinstance(result, dict) else {})
                 return
         finally:
-            # If the consumer abandons this generator mid-turn (the interrupt
-            # path ``return``s out of the ``async for``), a still-pending
-            # ``getter`` would otherwise leak, blocked on ``Queue.get()`` forever.
+            # If the consumer abandons this generator mid-turn, a pending
+            # ``getter`` would leak, blocked on ``Queue.get()`` forever.
             if getter is not None and not getter.done():
                 getter.cancel()
 
@@ -241,8 +223,8 @@ class AcpClient:
             )
             await self._proc.stdin.drain()
         except Exception as exc:  # noqa: BLE001 — cancel is best-effort; a dead pipe is expected
-            # Leave a breadcrumb: a silently-failed cancel looks identical to an
-            # interrupt that simply didn't stop the turn.
+            # Breadcrumb: a silently-failed cancel looks like an interrupt that
+            # just didn't stop the turn.
             logger.debug("AcpClient: session/cancel write failed: %s", exc)
 
     async def request(
@@ -333,8 +315,8 @@ class AcpClient:
         except asyncio.CancelledError:
             return
         except Exception as exc:  # noqa: BLE001 — reader logs and exits on any unexpected error
-            # An unexpected reader crash drops every subsequent message, which
-            # otherwise reads as a silent hang until the request timeout — warn.
+            # A reader crash drops all later messages — warn rather than hang
+            # silently until the request timeout.
             logger.warning("AcpClient reader error: %s", exc)
         finally:
             # Fail any in-flight requests so awaiters don't hang on a dead server.
@@ -355,9 +337,8 @@ class AcpClient:
             self._handle_server_request(msg)
             return
         if method == "session/update":
-            # ACP nests the update object under params.update —
-            # ``{"sessionId": ..., "update": {"sessionUpdate": ..., ...}}`` —
-            # so queue the inner update (what the harness maps to events).
+            # ACP nests the update under ``params.update``; queue that inner
+            # object (what the harness maps to events).
             params = msg.get("params", {})
             update = params.get("update") if isinstance(params, dict) else None
             if isinstance(update, dict):
@@ -367,18 +348,17 @@ class AcpClient:
         method = msg.get("method", "")
         request_id = msg.get("id")
         if isinstance(method, str) and "permission" in method:
-            # Auto-allow: the harness runs headless, so there is no human to
-            # prompt. Pick an "allow"-flavored option, else the first option.
+            # Headless: no human to prompt, so auto-allow (allow-flavored option,
+            # else the first).
             params = msg.get("params", {})
             options = params.get("options", []) if isinstance(params, dict) else []
             option_id = _pick_allow_option(options)
-            # Log the grant so a headless auto-allow is at least auditable after
-            # the fact (otherwise there is no record of what the agent was let do).
+            # Log the grant so a headless auto-allow stays auditable.
             logger.debug("AcpClient: auto-allowing %s -> option %r", method, option_id)
             self._reply(request_id, {"outcome": {"outcome": "selected", "optionId": option_id}})
             return
-        # Unknown server request (e.g. an fs op we declined capability for):
-        # null result keeps the protocol moving without granting anything.
+        # Unknown request (e.g. a declined fs op): null result keeps the protocol
+        # moving without granting anything.
         self._reply(request_id, {})
 
     @staticmethod

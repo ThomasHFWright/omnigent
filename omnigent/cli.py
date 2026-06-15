@@ -7633,14 +7633,11 @@ def _manage_harness_providers(family: str) -> None:
 def _manage_cursor_harness() -> None:
     """Run the level-2 loop for Cursor: install hint, then sign in / out.
 
-    Cursor authenticates against its own backend via ``cursor-agent login``
-    (or ``CURSOR_API_KEY``), so it has no provider/gateway credential to
-    manage — this drives the CLI's own auth instead of the provider menu. An
-    uninstalled CLI shows the manual install command (cursor-agent ships via a
-    curl installer, not npm) and returns; otherwise the loop toggles sign-in /
-    sign-out, confirming each via the CLI's own status.
-
-    :returns: None.
+    Cursor authenticates against its own backend (``cursor-agent login`` /
+    ``CURSOR_API_KEY``), so it has no provider/gateway credential — this drives
+    the CLI's own auth, not the provider menu. An uninstalled CLI shows the
+    install command (curl installer, not npm) and returns; otherwise the loop
+    toggles sign-in / sign-out, confirming each via the CLI's status.
     """
     from omnigent.onboarding.harness_install import (
         CURSOR_KEY,
@@ -8039,10 +8036,9 @@ def _run_configure_harnesses_interactive() -> None:
                 options.append(f"  {sub_line}")
                 selectable.append(False)  # a sub-line — cursor skips it
                 row_target.append(None)
-        # Cursor: a login-only harness (its own backend via ``cursor-agent
-        # login`` / ``CURSOR_API_KEY``), so it has no provider credential to
-        # configure — readiness is "CLI installed + signed in", and its
-        # drill-in drives cursor-agent's own auth, not the provider menu.
+        # Cursor: login-only (own backend), no provider credential to configure.
+        # Readiness is "CLI installed + signed in"; its drill-in drives
+        # cursor-agent's own auth, not the provider menu.
         cursor_installed = harness_cli_installed(CURSOR_KEY)
         cursor_ready = cursor_installed and harness_cli_logged_in(CURSOR_KEY)
         options.append(f"{'  ' if cursor_ready else '[red]✗[/] '}Cursor")

@@ -1397,22 +1397,18 @@ def _build_cursor_spawn_env(
     workdir: Path | None = None,
 ) -> dict[str, str]:
     """
-    Build the env-var dict the cursor harness wrap reads.
+    Build the ``HARNESS_CURSOR_*`` env-var dict the cursor harness wrap reads.
 
-    Maps spec.executor fields → the ``HARNESS_CURSOR_*`` env vars defined
-    in ``omnigent/inner/cursor_harness.py``. Unlike the gateway-backed
-    builders (claude-sdk / codex / pi / openai-agents), there is NO gateway or
-    Databricks-profile resolution: cursor-agent talks only to Cursor's own
-    backend (``CURSOR_API_KEY`` / ``cursor-agent login``) and has no custom API
-    base-URL override, so it never routes through the Databricks AI gateway.
-    That is also why cursor is intentionally absent from
-    :data:`AgentHarnessType` and the gateway/ucode dicts above.
+    Unlike the gateway-backed builders (claude-sdk / codex / pi / openai-agents),
+    there is NO gateway or Databricks-profile resolution: cursor-agent talks only
+    to Cursor's own backend (``CURSOR_API_KEY`` / ``cursor-agent login``), so it
+    never routes through the Databricks AI gateway — also why cursor is absent
+    from :data:`AgentHarnessType` and the gateway/ucode dicts above.
 
-    Auth: an explicit ``executor.auth: {type: api_key, api_key: ...}`` is
-    forwarded as ``HARNESS_CURSOR_API_KEY`` (cursor-agent reads it as
-    ``CURSOR_API_KEY``). With no api-key auth the harness falls back to an
-    inherited ``CURSOR_API_KEY`` or an existing ``cursor-agent login`` — a
-    ``DatabricksAuth`` profile does not apply to cursor and is ignored.
+    Auth: an explicit ``executor.auth`` api-key is forwarded as
+    ``HARNESS_CURSOR_API_KEY``; otherwise cursor falls back to an inherited
+    ``CURSOR_API_KEY`` / ``cursor-agent login`` (a ``DatabricksAuth`` profile is
+    ignored).
 
     :param spec: The agent spec.
     :param workdir: The bundle's on-disk path, threaded as
@@ -1424,13 +1420,12 @@ def _build_cursor_spawn_env(
     model = _resolve_spec_model(spec)
     if model is not None:
         env["HARNESS_CURSOR_MODEL"] = model
-    # Only an explicit api-key auth maps to cursor's CURSOR_API_KEY; Databricks
-    # / provider auth has no cursor equivalent and is left for cursor's own
-    # login / inherited CURSOR_API_KEY to satisfy.
+    # Only api-key auth maps to CURSOR_API_KEY; Databricks/provider auth has no
+    # cursor equivalent and is left to cursor's own login.
     if isinstance(spec.executor.auth, ApiKeyAuth):
         env["HARNESS_CURSOR_API_KEY"] = spec.executor.auth.api_key
-    # Always set so the wrap doesn't fall back to ``"all"`` and override an
-    # explicit ``skills: none`` from the spec (parity with the peer builders).
+    # Always set so the wrap doesn't default to ``"all"`` over an explicit
+    # ``skills: none`` (parity with the peer builders).
     env["HARNESS_CURSOR_SKILLS_FILTER"] = json.dumps(spec.skills_filter)
     if spec.name:
         env["HARNESS_CURSOR_AGENT_NAME"] = spec.name

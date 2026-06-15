@@ -45,10 +45,9 @@ from omnigent.onboarding.provider_config import ANTHROPIC_FAMILY, OPENAI_FAMILY
 # first-run ``run`` flow falls back to it, so it has install metadata too.
 PI_KEY = "pi"
 
-# Cursor authenticates against its own backend via ``cursor-agent login`` (or
-# ``CURSOR_API_KEY``) — it has no provider/gateway credential, and its CLI ships
-# via a curl installer + self-update rather than npm, so it carries an
-# ``install_hint`` instead of a ``package``.
+# Cursor authenticates against its own backend (``cursor-agent login`` /
+# ``CURSOR_API_KEY``) with no provider/gateway credential, and ships via a curl
+# installer rather than npm — so it carries an ``install_hint``, not a ``package``.
 CURSOR_KEY = "cursor"
 
 
@@ -242,8 +241,7 @@ def install_harness_cli(key: str) -> bool:
     """
     spec = _HARNESS_INSTALL.get(key)
     if spec is not None and spec.package is None:
-        # Non-npm CLI (e.g. cursor-agent ships via a curl installer); there is
-        # no auto-install path, so the caller shows its ``install_hint``.
+        # Non-npm CLI (e.g. cursor-agent): no auto-install; caller shows install_hint.
         return False
     if shutil.which("npm") is None:
         return False

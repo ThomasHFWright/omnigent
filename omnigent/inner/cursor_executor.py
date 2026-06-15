@@ -1,24 +1,19 @@
 """CursorExecutor: run agents through a persistent ``cursor-agent acp`` session.
 
-Drives Cursor's ``cursor-agent`` CLI over the Agent Client Protocol (ACP,
-``cursor-agent acp``). Per Omnigent conversation it holds one ACP session
-(``session/new``) that stays open across turns; each ``run_turn`` sends one
-``session/prompt`` and translates the streamed ``session/update`` notifications
-into ExecutorEvents (assistant text → :class:`TextChunk`, agent thoughts →
-:class:`ReasoningChunk`, tool calls → :class:`ToolCallRequest` /
-:class:`ToolCallComplete`), completing on the prompt response's ``stopReason``.
-The ACP transport lives in :class:`omnigent.inner.cursor_acp.AcpClient`.
+Holds one ACP session per Omnigent conversation (via
+:class:`omnigent.inner.cursor_acp.AcpClient`), kept open across turns. Each
+``run_turn`` sends one ``session/prompt`` and maps the streamed
+``session/update`` notifications to ExecutorEvents (text → :class:`TextChunk`,
+thoughts → :class:`ReasoningChunk`, tool calls → :class:`ToolCallRequest` /
+:class:`ToolCallComplete`), completing on the response's ``stopReason``.
 
-cursor-agent talks only to Cursor's own backend (``CURSOR_API_KEY`` /
-``cursor-agent login``); there is no Databricks gateway, so a ``databricks-*``
-model id is dropped in favor of cursor's default. The system prompt is prepended
-to the first turn (ACP has no system-prompt field). The agent uses its own
-native tools; bridging Omnigent spec-declared tools would require an http/sse
-MCP server via ``session/new`` ``mcpServers``, and ACP reports no token usage.
+cursor-agent talks only to Cursor's backend (``CURSOR_API_KEY`` /
+``cursor-agent login``) — no Databricks gateway, so a ``databricks-*`` model id
+is dropped for cursor's default. The system prompt is prepended to the first
+turn (ACP has no system-prompt field). The agent uses its own native tools, and
+ACP reports no token usage.
 
-Requirements:
-    The ``cursor-agent`` CLI must be installed and on PATH (or
-    ``HARNESS_CURSOR_PATH`` set).
+Requires the ``cursor-agent`` CLI on PATH (or ``HARNESS_CURSOR_PATH`` set).
 """
 
 from __future__ import annotations
@@ -51,15 +46,13 @@ from .executor import (
 
 logger = logging.getLogger(__name__)
 
-# One ACP ``session/update`` payload (the inner ``params.update`` object).
-# Opaque JSON owned by the ACP spec / cursor-agent.
+# One ACP ``session/update`` payload (inner ``params.update``); opaque JSON.
 AcpUpdate: TypeAlias = dict[str, Any]  # type: ignore[explicit-any]
 
-# Prefix-matched env var names allowed into the cursor-agent subprocess. Only
-# known-safe categories pass: Cursor's own config knobs, proxy/TLS settings,
-# Node.js runtime knobs (cursor-agent bundles a Node runtime), and locale.
-# Credential families (``DATABRICKS_*``, ``AWS_*``, provider API keys, ...)
-# deliberately do NOT match — mirrors :data:`pi_executor._PI_ENV_ALLOW_PREFIXES`.
+# Env var prefixes allowed into the cursor-agent subprocess: only known-safe
+# categories (Cursor config, proxy/TLS, Node runtime, locale). Credential
+# families (``DATABRICKS_*``, ``AWS_*``, ...) deliberately do NOT match —
+# mirrors :data:`pi_executor._PI_ENV_ALLOW_PREFIXES`.
 _CURSOR_ENV_ALLOW_PREFIXES: tuple[str, ...] = (
     "CURSOR_",
     "HTTP_",
@@ -73,8 +66,8 @@ _CURSOR_ENV_ALLOW_PREFIXES: tuple[str, ...] = (
     "LC_",
 )
 
-# Exact-matched env var names allowed into the cursor-agent subprocess: the
-# minimal set a POSIX CLI reasonably expects (HOME carries ~/.cursor login).
+# Exact env var names allowed in: the minimal set a POSIX CLI expects
+# (HOME carries the ~/.cursor login).
 _CURSOR_ENV_ALLOW_EXACT: frozenset[str] = frozenset(
     {
         "HOME",
@@ -99,9 +92,8 @@ def _find_cursor() -> str | None:
 def _sandbox_mode(os_env: OSEnvSpec | None) -> str:
     """Map ``os_env.sandbox`` to cursor-agent's ``--sandbox`` mode.
 
-    Mirrors codex's ``_sandbox_mode``: a restrictive sandbox enables cursor's
-    own sandbox; ``"none"`` / unset (the headless default) disables it for full
-    access. Enforcement is cursor-agent's, not Omnigent's bwrap.
+    Mirrors codex: a restrictive sandbox enables cursor's own sandbox; ``"none"``
+    / unset disables it. Enforcement is cursor-agent's, not Omnigent's bwrap.
     """
     sandbox = os_env.sandbox if os_env is not None else None
     if sandbox is None or sandbox.type == "none":
@@ -112,11 +104,10 @@ def _sandbox_mode(os_env: OSEnvSpec | None) -> str:
 def _clean_cursor_env(extra_allowed: Sequence[str] | None = None) -> dict[str, str]:
     """Build a filtered copy of ``os.environ`` for the cursor-agent subprocess.
 
-    Deny-by-default allowlist mirroring :func:`pi_executor._clean_pi_env`: only
-    the known-safe prefixes/exact names pass, so host secrets (cloud tokens,
-    unrelated API keys) never reach the cursor-agent process. ``CURSOR_API_KEY``
-    is allowed via the ``CURSOR_`` prefix; the executor also injects it
-    explicitly from config when provided.
+    Deny-by-default allowlist (mirrors :func:`pi_executor._clean_pi_env`): only
+    known-safe prefixes/exact names pass, so host secrets never reach
+    cursor-agent. ``CURSOR_API_KEY`` passes via the ``CURSOR_`` prefix; the
+    executor also injects it explicitly from config when provided.
 
     :param extra_allowed: Extra exact names to pass through, e.g. a spec's
         ``os_env.sandbox.env_passthrough`` entries. ``None`` means no extras.
@@ -171,12 +162,10 @@ def _build_cursor_prompt(
 ) -> str:
     """Build the prompt text for a ``session/prompt``.
 
-    cursor-agent's ACP session has no system-prompt field, so on the first turn
-    the Omnigent system prompt is prepended. When the first turn also carries
-    prior history (e.g. a sub-agent with ``pass_history=True``), the
-    conversation is serialized so cursor has context. On subsequent turns the
-    ACP session already holds the history, so only the latest user message is
-    sent.
+    ACP has no system-prompt field, so on the first turn the system prompt is
+    prepended. A first turn that also carries prior history (e.g. a sub-agent
+    with ``pass_history=True``) serializes the conversation for context; later
+    turns send only the latest user message, since the session holds the rest.
 
     :param messages: Omnigent conversation history for the turn.
     :param is_first_turn: ``True`` when this is the first turn against a fresh
@@ -325,8 +314,8 @@ class CursorExecutor(Executor):
         return True
 
     def supports_live_message_queue(self) -> bool:
-        # Unlike claude-sdk / codex / pi, ACP exposes no confirmed mid-turn
-        # steer, so a message can't be injected into a running turn.
+        # ACP exposes no mid-turn steer, so a message can't be injected into a
+        # running turn.
         return False
 
     def _session_key(self, messages: list[Message]) -> str:
@@ -342,10 +331,9 @@ class CursorExecutor(Executor):
     def _resolve_model(self, config: ExecutorConfig | None) -> str | None:
         """Resolve the cursor model; drop non-cursor ``databricks-*`` ids.
 
-        cursor-agent accepts only Cursor model ids (``auto``, ``gpt-5``,
-        ``claude-4.5-sonnet``, ...) and rejects gateway ids, so a
-        ``databricks-*`` model (from a spec authored for another harness) falls
-        back to cursor's default. Returns ``None`` to use cursor's default.
+        cursor-agent accepts only Cursor model ids and rejects gateway ids, so a
+        ``databricks-*`` model (from a spec for another harness) falls back to
+        cursor's default. Returns ``None`` to use that default.
         """
         cfg = config or ExecutorConfig()
         model = cfg.model or self._model_override
@@ -371,9 +359,8 @@ class CursorExecutor(Executor):
         if state.client is not None and state.session_id is not None:
             with contextlib.suppress(Exception):
                 await state.client.cancel(state.session_id)
-        # Always drop the session so the next turn starts fresh — same rationale
-        # as the pi executor (a resumed turn would bypass the runner's interrupt
-        # marker).
+        # Always drop the session so the next turn starts fresh (like the pi
+        # executor); a resumed turn would bypass the runner's interrupt marker.
         try:
             await self.close_session(session_key)
             return True
@@ -388,13 +375,11 @@ class CursorExecutor(Executor):
     async def _ensure_session(self, state: _CursorSessionState, model: str | None) -> None:
         """Spawn the ACP server and open a session if one isn't live.
 
-        On any failure during bring-up the freshly-spawned client is closed
-        before propagating, so a failed ``initialize`` / ``session/new`` (bad
-        ``CURSOR_API_KEY``, rejected model, transient init error) can't orphan a
-        live ``cursor-agent`` process and its reader tasks. ``AcpError`` /
-        ``OSError`` are re-raised as ``AcpError`` with the captured stderr tail
-        attached, so the caller surfaces *why* (e.g. an auth message) instead of
-        a bare "closed the connection".
+        On any bring-up failure the freshly-spawned client is closed before
+        propagating, so a failed ``initialize`` / ``session/new`` can't orphan a
+        live process and its reader tasks. ``AcpError`` / ``OSError`` are
+        re-raised as ``AcpError`` with the stderr tail attached, so the caller
+        surfaces *why* (e.g. an auth message) rather than "closed the connection".
         """
         if state.client is not None and state.client.running:
             return
@@ -428,8 +413,8 @@ class CursorExecutor(Executor):
         model = self._resolve_model(config)
         state = self._session_states.setdefault(session_key, _CursorSessionState())
 
-        # The system prompt is baked into the first turn and the model is fixed
-        # at session creation, so a change to either means a fresh ACP session.
+        # System prompt is baked into the first turn and the model is fixed at
+        # session creation, so a change to either needs a fresh ACP session.
         if state.client is not None and (
             state.system_prompt != system_prompt or state.model != model
         ):
@@ -468,11 +453,9 @@ class CursorExecutor(Executor):
                             response_text += event.text
                         yield event
                 elif kind == "error":
-                    # A JSON-RPC error response to ``session/prompt`` leaves the
-                    # session suspect. Drop it (mirror the ``AcpError`` path
-                    # below) so the retry rebuilds a fresh session and re-sends
-                    # the system prompt, rather than reusing a wedged session
-                    # with ``is_first_turn`` already False.
+                    # A JSON-RPC error leaves the session suspect; drop it (like
+                    # the ``AcpError`` path below) so the retry rebuilds a fresh
+                    # session and re-sends the system prompt.
                     stderr = state.client.stderr_tail() if state.client is not None else ""
                     await self.close_session(session_key)
                     suffix = f" Stderr: {stderr}" if stderr else ""
@@ -481,12 +464,11 @@ class CursorExecutor(Executor):
                     )
                     return
                 else:  # "result"
-                    # stopReason in payload; ACP reports no token usage, so the
-                    # turn is left unpriced (usage=None).
+                    # ACP reports no token usage, so the turn is unpriced.
                     yield TurnComplete(response=response_text or None, usage=None)
                     return
         except AcpError as exc:
-            # The ACP server died mid-turn — drop the session so the next turn
+            # ACP server died mid-turn — drop the session so the next turn
             # respawns it, and surface a retryable error.
             stderr = state.client.stderr_tail() if state.client is not None else ""
             await self.close_session(session_key)

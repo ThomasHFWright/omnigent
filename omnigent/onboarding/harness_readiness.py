@@ -89,9 +89,8 @@ def harness_is_configured(harness: str) -> bool:
     if canonical in _SDK_HARNESSES:
         return True
     if canonical == CURSOR_KEY:
-        # Cursor wraps the ``cursor-agent`` CLI but authenticates against its
-        # own backend; the daemon can only verify the binary is on PATH (login
-        # state needs a subprocess), so gate on install like the other CLIs.
+        # The daemon can only check the binary is on PATH (login state needs a
+        # subprocess), so gate on install like the other CLIs.
         return harness_cli_installed(CURSOR_KEY)
     if canonical not in _HARNESS_FAMILY and canonical != PI_SURFACE:
         # Unknown harness — the daemon has no install metadata for it, so

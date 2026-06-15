@@ -1,39 +1,30 @@
 """
 ``harness: cursor`` wrap.
 
-Thin module exposing :func:`create_app` — the entrypoint the shared
-:mod:`omnigent.runtime.harnesses._runner` invokes after the parent process
-resolves ``"cursor"`` to this module via
-:data:`omnigent.runtime.harnesses._HARNESS_MODULES`.
+Exposes :func:`create_app` — the entrypoint the shared
+:mod:`omnigent.runtime.harnesses._runner` invokes once ``"cursor"`` resolves
+here via :data:`omnigent.runtime.harnesses._HARNESS_MODULES`. Wraps a
+:class:`omnigent.inner.cursor_executor.CursorExecutor` (a persistent
+``cursor-agent acp`` session), mirroring the codex / pi wraps' env-var flow.
 
-Wraps a :class:`omnigent.inner.cursor_executor.CursorExecutor`, which
-drives a persistent ``cursor-agent acp`` session. Mirrors the codex / pi wraps'
-env-var config flow.
-
-Unlike the gateway-backed harnesses, cursor has NO gateway /
-Databricks-profile env vars: cursor-agent talks only to Cursor's own backend
-(``CURSOR_API_KEY`` / ``cursor-agent login``) and has no custom API base-URL
-override, so there is nothing for the workflow layer to route through the
-Databricks AI gateway.
+Cursor has NO gateway / Databricks-profile env vars: cursor-agent talks only to
+its own backend (``CURSOR_API_KEY`` / ``cursor-agent login``), so nothing routes
+through the Databricks AI gateway.
 
 Env vars read at startup:
 
-- ``HARNESS_CURSOR_MODEL``: Cursor model id, e.g. ``"gpt-5"`` or ``"auto"``.
-  ``None`` lets cursor-agent pick its configured default. A ``databricks-*`` id
-  (from a spec authored for another harness) is dropped by the executor.
-- ``HARNESS_CURSOR_PATH``: absolute path to a ``cursor-agent`` CLI binary.
-  ``None`` searches ``PATH``.
-- ``HARNESS_CURSOR_CWD``: working directory the session operates in.
-  ``None`` falls back to ``os_env.cwd`` then the process cwd.
-- ``HARNESS_CURSOR_API_KEY``: Cursor API key, injected as ``CURSOR_API_KEY``.
-  ``None`` falls back to an inherited ``CURSOR_API_KEY`` or ``cursor-agent login``.
-- ``HARNESS_CURSOR_OS_ENV``: JSON-encoded :class:`OSEnvSpec` (its ``cwd`` is
-  used when ``HARNESS_CURSOR_CWD`` is unset). Defaults to
-  ``caller_process + sandbox=none``.
-- ``HARNESS_CURSOR_SKILLS_FILTER``: JSON ``str | list[str]`` (parity;
-  cursor has no skill mechanism here). Defaults to ``"all"``.
-- ``HARNESS_CURSOR_BUNDLE_DIR`` / ``HARNESS_CURSOR_AGENT_NAME``:
-  reserved for future use.
+- ``HARNESS_CURSOR_MODEL``: Cursor model id (e.g. ``"gpt-5"``); ``None`` uses
+  cursor's default. A ``databricks-*`` id is dropped by the executor.
+- ``HARNESS_CURSOR_PATH``: path to ``cursor-agent``; ``None`` searches ``PATH``.
+- ``HARNESS_CURSOR_CWD``: session working dir; ``None`` falls back to
+  ``os_env.cwd`` then the process cwd.
+- ``HARNESS_CURSOR_API_KEY``: injected as ``CURSOR_API_KEY``; ``None`` falls back
+  to an inherited key or ``cursor-agent login``.
+- ``HARNESS_CURSOR_OS_ENV``: JSON :class:`OSEnvSpec` (its ``cwd`` is used when
+  ``HARNESS_CURSOR_CWD`` is unset). Defaults to ``caller_process + sandbox=none``.
+- ``HARNESS_CURSOR_SKILLS_FILTER``: JSON ``str | list[str]`` (parity; cursor has
+  no skill mechanism). Defaults to ``"all"``.
+- ``HARNESS_CURSOR_BUNDLE_DIR`` / ``HARNESS_CURSOR_AGENT_NAME``: reserved.
 """
 
 from __future__ import annotations
@@ -65,10 +56,9 @@ _ENV_AGENT_NAME = "HARNESS_CURSOR_AGENT_NAME"
 def _resolve_os_env() -> OSEnvSpec:
     """Resolve the inner-executor :class:`OSEnvSpec` from :data:`_ENV_OS_ENV`.
 
-    Decodes the JSON-encoded dict Omnigent serialized via
-    :func:`dataclasses.asdict`. When the env var is missing or malformed, falls
-    back to ``caller_process + sandbox=none`` — matches the codex/pi wraps'
-    default for specs without an ``os_env:`` block.
+    Decodes the JSON dict Omnigent serialized via :func:`dataclasses.asdict`,
+    falling back to ``caller_process + sandbox=none`` (the codex/pi default for
+    specs without an ``os_env:`` block) when missing or malformed.
     """
     raw = os.environ.get(_ENV_OS_ENV, "").strip()
     if raw:
