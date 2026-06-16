@@ -1303,9 +1303,8 @@ export function NewChatLandingScreen() {
     // the hero reads better optically.
     <div className="flex flex-1 items-center justify-center" data-testid="new-chat-landing">
       {/* Padding lives inside the 840px cap, so the composer renders at
-          840 − 80 = 760px max on desktop. Mobile drops the inline padding to
-          px-4 so the composer isn't needlessly narrow on a phone. */}
-      <div className="flex w-full max-w-[840px] flex-col items-center gap-8 px-4 pt-8 pb-16 md:px-10">
+          840 − 32 = 808px max; the parent flex centers it on wider screens. */}
+      <div className="flex w-full max-w-[840px] flex-col items-center gap-8 px-4 pt-8 pb-16">
         <div className="flex flex-col items-center gap-3.5 sm:flex-row">
           <OttoEyes className="h-18 w-auto shrink-0" />
           <h1 className="text-center text-3xl font-medium tracking-[-0.03em] text-foreground sm:text-left">
