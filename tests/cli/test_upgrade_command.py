@@ -224,6 +224,53 @@ def test_upgrade_without_pre_ignores_release_candidate(
     assert "up to date" in result.output
 
 
+def test_count_running_sessions_ignores_idle_connected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only ``status == "running"`` sessions count; idle-connected ones don't."""
+    from omnigent.cli import _count_running_sessions, _SessionPagesResult
+
+    sessions = [
+        {"id": "a", "status": "idle"},
+        {"id": "b", "status": "running"},
+        {"id": "c", "status": "idle"},
+        {"id": "d", "status": "running"},
+        {"id": "e"},  # missing status → not running
+    ]
+    monkeypatch.setattr(
+        "omnigent.cli._fetch_session_pages",
+        lambda **_kw: _SessionPagesResult(sessions=sessions, error=None),
+    )
+
+    assert _count_running_sessions("http://127.0.0.1:6767") == 2
+
+
+def test_drain_returns_immediately_when_only_idle_connected(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: 39 idle-but-connected sessions must not block the drain.
+
+    Previously the drain counted *connected* sessions, so a box with idle
+    sessions holding their connection open hung ``omni upgrade`` forever.
+    """
+    from omnigent.cli import _SessionPagesResult, _wait_for_local_sessions_to_drain
+
+    monkeypatch.setattr(
+        "omnigent.cli.local_server_status",
+        lambda: LocalServerInfo(running=True, pid=1, port=6767, url="http://127.0.0.1:6767"),
+    )
+    monkeypatch.setattr(
+        "omnigent.cli._fetch_session_pages",
+        lambda **_kw: _SessionPagesResult(
+            sessions=[{"id": f"conv_{i}", "status": "idle"} for i in range(39)], error=None
+        ),
+    )
+
+    _wait_for_local_sessions_to_drain()  # must return, not hang
+
+    assert "Waiting for" not in capsys.readouterr().out
+
+
 def test_upgrade_pre_passes_prerelease_flag_to_installer(
     monkeypatch: pytest.MonkeyPatch, _wheel_install: None
 ) -> None:

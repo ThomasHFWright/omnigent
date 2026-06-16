@@ -3314,39 +3314,49 @@ def stop(force: bool) -> None:
         raise click.ClickException("; ".join(failures) + " — retry with --force.")
 
 
-def _count_connected_sessions(base_url: str) -> int:
-    """Count the local server's currently-connected (in-flight) sessions.
+def _count_running_sessions(base_url: str) -> int:
+    """Count sessions actively running a turn on the local server.
 
-    A transient HTTP failure is treated as "none in flight" rather than
-    blocking the upgrade — the worst case is we stop a session that was
-    about to be reported, which the drain loop's re-poll would otherwise
-    have caught.
+    Gates on the session-list ``status`` field (``"running"`` — a runner
+    mid-turn, or with a still-running sub-agent), NOT mere connectedness:
+    an idle session keeps its host/runner connection open indefinitely, so
+    counting connected sessions would make the drain wait forever for
+    sessions that aren't doing any work. Only ``"running"`` sessions hold
+    in-flight work an upgrade should avoid interrupting.
+
+    A transient HTTP failure is treated as "none running" rather than
+    blocking the upgrade — the server's own graceful shutdown still drains
+    any runner that happens to be mid-turn.
 
     :param base_url: Local server base URL, e.g. ``"http://127.0.0.1:6767"``.
-    :returns: Number of connected sessions, or ``0`` on a query failure.
+    :returns: Number of sessions with ``status == "running"``, or ``0`` on
+        a query failure.
     """
     with contextlib.suppress(click.ClickException):
-        return len(_fetch_session_pages(base_url=base_url, connected_only=True).sessions)
+        pages = _fetch_session_pages(base_url=base_url, connected_only=True)
+        return sum(1 for session in pages.sessions if session.get("status") == "running")
     return 0
 
 
 def _wait_for_local_sessions_to_drain() -> None:
-    """Block until the local server reports no connected sessions.
+    """Block until no local session is actively running a turn.
 
     Used by ``omni upgrade`` (without ``--force``) so an upgrade never
-    yanks a running agent turn. Polls every :data:`_UPGRADE_DRAIN_POLL_S`
-    seconds and re-prints the count whenever it changes; ``Ctrl-C``
-    aborts the wait (and therefore the upgrade) cleanly. Returns
-    immediately when the server is down or already idle.
+    yanks a running agent turn. Waits only on sessions whose status is
+    ``"running"`` (see :func:`_count_running_sessions`) — idle-but-connected
+    sessions do not hold it up. Polls every :data:`_UPGRADE_DRAIN_POLL_S`
+    seconds and re-prints the count whenever it changes; ``Ctrl-C`` aborts
+    the wait (and the upgrade) cleanly. Returns immediately when the server
+    is down or already idle.
     """
     info = local_server_status()
     if not (info.running and info.url is not None):
         return
-    count = _count_connected_sessions(info.url)
+    count = _count_running_sessions(info.url)
     if count == 0:
         return
     click.echo(
-        f"Waiting for {count} in-flight session(s) to finish — press Ctrl-C to "
+        f"Waiting for {count} running session(s) to finish — press Ctrl-C to "
         "abort, or re-run with --force to stop them now."
     )
     last = count
@@ -3355,7 +3365,7 @@ def _wait_for_local_sessions_to_drain() -> None:
         info = local_server_status()
         if not (info.running and info.url is not None):
             return
-        count = _count_connected_sessions(info.url)
+        count = _count_running_sessions(info.url)
         if count == 0:
             return
         if count != last:
