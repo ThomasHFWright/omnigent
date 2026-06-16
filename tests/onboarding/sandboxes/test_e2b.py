@@ -12,10 +12,13 @@ import pytest
 
 from omnigent.onboarding.sandboxes.base import SandboxCapabilityError
 from omnigent.onboarding.sandboxes.e2b import (
+    _HOBBY_FALLBACK_LIFETIME_S,
     DEFAULT_E2B_TEMPLATE,
     SANDBOX_ENV_PASSTHROUGH_ENV_VAR,
     TEMPLATE_ENV_VAR,
     E2BSandboxLauncher,
+    _is_missing_template_error,
+    _lifetime_cap_from_error,
     resolve_max_lifetime_s,
 )
 
@@ -36,6 +39,11 @@ class _NotFoundException(_SandboxException):
 
 
 class _TemplateException(_SandboxException):
+    pass
+
+
+class _AuthenticationException(Exception):
+    # Mirrors the real class: extends Exception, NOT SandboxException.
     pass
 
 
@@ -74,13 +82,18 @@ class _State:
     stream_result: _FakeCommandResult = field(default_factory=_FakeCommandResult)
     running: bool = True
     connect_missing: bool = False
+    connect_calls: list[str] = field(default_factory=list)
     kill_missing: bool = False
+    kill_raises: bool = False
     set_timeout_raises: bool = False
     create_raises: BaseException | None = None
     # When set, create() rejects (like E2B's 400) any timeout above this many
     # seconds, reporting the cap in hours — drives the clamp-and-retry test.
     reject_timeout_over: int | None = None
     handle_killed: bool = False
+    # When set, a background command's wait() raises this — drives the
+    # stream transport-error path.
+    stream_wait_raises: BaseException | None = None
 
 
 class _FakeCommandHandle:
@@ -93,6 +106,8 @@ class _FakeCommandHandle:
             on_stdout(result.stdout)
         if on_stderr is not None and result.stderr:
             on_stderr(result.stderr)
+        if self._state.stream_wait_raises is not None:
+            raise self._state.stream_wait_raises
         if result.exit_code != 0:
             raise _CommandExitException(
                 stdout=result.stdout, stderr=result.stderr, exit_code=result.exit_code
@@ -100,6 +115,8 @@ class _FakeCommandHandle:
         return result
 
     def kill(self) -> bool:
+        if self._state.kill_raises:
+            raise _SandboxException("already exited")
         self._state.handle_killed = True
         return True
 
@@ -155,6 +172,7 @@ class _FakeSandbox:
 
     @classmethod
     def connect(cls, sandbox_id: str, **kwargs) -> _FakeSandbox:
+        cls._state.connect_calls.append(sandbox_id)
         if cls._state.connect_missing:
             raise _NotFoundException(sandbox_id)
         return cls(sandbox_id)
@@ -188,6 +206,7 @@ def sdk(monkeypatch: pytest.MonkeyPatch) -> _State:
     exc.SandboxException = _SandboxException  # type: ignore[attr-defined]
     exc.NotFoundException = _NotFoundException  # type: ignore[attr-defined]
     exc.TemplateException = _TemplateException  # type: ignore[attr-defined]
+    exc.AuthenticationException = _AuthenticationException  # type: ignore[attr-defined]
     mod.exceptions = exc  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "e2b", mod)
@@ -254,9 +273,27 @@ def test_provision_env_passthrough_missing_var_fails_loud(sdk: _State) -> None:
         E2BSandboxLauncher(env=["NOT_SET_ANYWHERE"]).provision("x")
 
 
-def test_provision_template_unavailable_points_at_build(sdk: _State) -> None:
-    sdk.create_raises = _TemplateException("not found")
+def test_provision_incompatible_template_points_at_build(sdk: _State) -> None:
+    # TemplateException is the SDK's incompatible/old-envd template signal.
+    sdk.create_raises = _TemplateException("envd version too old")
     with pytest.raises(click.ClickException, match="e2b template build"):
+        E2BSandboxLauncher().provision("x")
+
+
+def test_provision_missing_template_points_at_build(sdk: _State) -> None:
+    # A missing/unbuilt template is a PLAIN SandboxException ("404: template
+    # '…' not found"), not TemplateException — the most common first-run
+    # failure must still surface the build hint.
+    sdk.create_raises = _SandboxException("404: template 'omnigent-host' not found")
+    with pytest.raises(click.ClickException, match="e2b template build"):
+        E2BSandboxLauncher().provision("x")
+
+
+def test_provision_auth_error_is_friendly(sdk: _State) -> None:
+    # AuthenticationException does NOT extend SandboxException; it must still
+    # surface as a credential hint, not escape raw.
+    sdk.create_raises = _AuthenticationException("401: invalid api key")
+    with pytest.raises(click.ClickException, match="E2B_API_KEY"):
         E2BSandboxLauncher().provision("x")
 
 
@@ -281,6 +318,56 @@ def test_provision_env_override_skips_retry(sdk: _State, monkeypatch: pytest.Mon
     sdk.reject_timeout_over = 3600
     E2BSandboxLauncher().provision("x")
     assert [call["timeout"] for call in sdk.create_calls] == [3600]
+
+
+def test_provision_reraises_when_cap_not_below_request(sdk: _State) -> None:
+    # A timeout rejection whose parsed cap (48h) is NOT below the 24h request
+    # must surface as an error with NO second create attempt (no blind retry).
+    sdk.create_raises = _SandboxException("400: Timeout cannot be greater than 48 hours")
+    with pytest.raises(click.ClickException, match="E2B sandbox creation failed"):
+        E2BSandboxLauncher().provision("x")
+    assert len(sdk.create_calls) == 1
+
+
+def test_provision_clamp_retry_also_failing_surfaces_error(sdk: _State) -> None:
+    # First create rejects over-cap (→ clamp), and the clamped retry also
+    # fails — provision must surface a ClickException after exactly 2 attempts.
+    sdk.create_raises = _SandboxException("400: Timeout cannot be greater than 1 hours")
+    with pytest.raises(click.ClickException, match="E2B sandbox creation failed"):
+        E2BSandboxLauncher().provision("x")
+    assert len(sdk.create_calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("400: Timeout cannot be greater than 1 hours", 3600),  # regex path
+        ("400: Timeout cannot be greater than 24 hours", 24 * 3600),  # regex path
+        ("Timeout cannot be greater than", _HOBBY_FALLBACK_LIFETIME_S),  # unparsed fallback
+        ("404: template 'x' not found", None),  # unrelated → re-raise
+    ],
+)
+def test_lifetime_cap_from_error_branches(message: str, expected: int | None) -> None:
+    assert _lifetime_cap_from_error(message) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("404: template 'omnigent-host' not found", True),
+        ("Template 'x' Not Found", True),  # case-insensitive
+        ("400: Timeout cannot be greater than 1 hours", False),
+        ("429: rate limited", False),
+    ],
+)
+def test_is_missing_template_error(message: str, expected: bool) -> None:
+    assert _is_missing_template_error(message) is expected
+
+
+def test_resolve_max_lifetime_rejects_non_numeric(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OMNIGENT_E2B_MAX_LIFETIME_S", "soon")
+    with pytest.raises(click.ClickException, match="must be a number of seconds"):
+        resolve_max_lifetime_s()
 
 
 # ── run ─────────────────────────────────────────────────────
@@ -379,7 +466,8 @@ def test_stream_exec_combines_output_and_returns_stable_iterator(sdk: _State) ->
     sdk.stream_result = _FakeCommandResult(stdout="out\n", stderr="err\n", exit_code=0)
     process = E2BSandboxLauncher().stream_exec("sb-e2b-1", "do-thing")
     # The lines property must return the same iterator across accesses.
-    assert process.lines is process.lines
+    first_access = process.lines
+    assert process.lines is first_access
     assert list(process.lines) == ["out\n", "err\n"]
     assert process.wait() == 0
 
@@ -401,6 +489,93 @@ def test_exec_foreground_echoes_and_returns_exit_code(
     # TERM is forced and the command is exec'd inside the login shell.
     foreground_cmd = sdk.run_calls[-1]["cmd"]
     assert "TERM=xterm-256color exec omnigent host" in foreground_cmd
+
+
+def test_stream_exec_disables_per_command_timeout(sdk: _State) -> None:
+    # The streaming path backs the long-lived foreground host; it must disable
+    # the SDK's default 60s per-command cap (timeout=0), like run() does.
+    E2BSandboxLauncher().stream_exec("sb-e2b-1", "omnigent host")
+    assert sdk.run_calls[-1]["background"] is True
+    assert sdk.run_calls[-1]["timeout"] == 0
+
+
+def test_stream_exec_wait_surfaces_transport_error(sdk: _State) -> None:
+    # A non-CommandExit failure from wait() (daemon outage) is a transport
+    # error: wait() must re-raise it as a ClickException.
+    sdk.stream_wait_raises = _SandboxException("daemon connection lost")
+    process = E2BSandboxLauncher().stream_exec("sb-e2b-1", "do-thing")
+    list(process.lines)  # drain to the sentinel
+    with pytest.raises(click.ClickException, match="daemon connection lost"):
+        process.wait()
+
+
+def test_stream_exec_nonzero_exit_returns_code_without_raising(sdk: _State) -> None:
+    # A non-zero stream exit is a normal outcome the caller inspects: wait()
+    # RETURNS the code (contrast with run(), which raises when check=True).
+    sdk.stream_result = _FakeCommandResult(stdout="x\n", exit_code=5)
+    process = E2BSandboxLauncher().stream_exec("sb-e2b-1", "false")
+    assert list(process.lines) == ["x\n"]
+    assert process.wait() == 5
+
+
+def test_stream_exec_close_swallows_kill_error(sdk: _State) -> None:
+    # close() is best-effort and must never raise, even if kill() errors.
+    sdk.kill_raises = True
+    process = E2BSandboxLauncher().stream_exec("sb-e2b-1", "do-thing")
+    process.wait()
+    process.close()  # must not raise
+    process.close()  # idempotent
+
+
+def test_stream_exec_appends_newline_to_partial_final_chunk(sdk: _State) -> None:
+    # A callback chunk with no trailing newline still yields a newline-
+    # terminated combined stream (the RemoteProcess contract).
+    sdk.stream_result = _FakeCommandResult(stdout="partial", exit_code=0)
+    process = E2BSandboxLauncher().stream_exec("sb-e2b-1", "do-thing")
+    assert "".join(process.lines) == "partial\n"
+    assert process.wait() == 0
+
+
+def test_exec_foreground_kills_on_keyboard_interrupt(
+    sdk: _State, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Ctrl-C during the attach must kill the remote process (real close())
+    # and re-raise.
+    closed: list[bool] = []
+
+    class _Interrupting:
+        @property
+        def lines(self):
+            raise KeyboardInterrupt
+
+        def wait(self) -> int:
+            return 0
+
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(
+        E2BSandboxLauncher, "stream_exec", lambda self, sid, cmd, *, pty=False: _Interrupting()
+    )
+    with pytest.raises(KeyboardInterrupt):
+        E2BSandboxLauncher().exec_foreground("sb-e2b-1", "omnigent host")
+    assert closed == [True]
+
+
+def test_resolve_caches_handle_across_primitives(sdk: _State) -> None:
+    # Two primitives on the same id connect once (cached handle).
+    launcher = E2BSandboxLauncher()
+    launcher.run("sb-e2b-1", "a")
+    launcher.run("sb-e2b-1", "b")
+    assert sdk.connect_calls == ["sb-e2b-1"]
+
+
+def test_provision_caches_handle_so_run_skips_connect(sdk: _State) -> None:
+    # provision caches the created sandbox; a follow-up run reuses it (no connect).
+    launcher = E2BSandboxLauncher()
+    sandbox_id = launcher.provision("x")
+    launcher.run(sandbox_id, "echo hi")
+    assert sdk.connect_calls == []
 
 
 # ── wheel install + capability surface ──────────────────────

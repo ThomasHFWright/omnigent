@@ -170,6 +170,40 @@ def _lifetime_cap_from_error(message: str) -> int | None:
     return None
 
 
+def _is_missing_template_error(message: str) -> bool:
+    """
+    Whether an E2B creation error indicates a missing/unknown template.
+
+    A template that was never built (or is misnamed) surfaces as a plain
+    ``SandboxException`` — ``"404: template '<name>' not found"`` — NOT a
+    ``TemplateException`` (which the SDK reserves for an incompatible/old
+    template). This is the most common first-run failure, so the launcher
+    detects it to point the operator at the build step.
+
+    :param message: The SDK exception's string form.
+    :returns: ``True`` for a missing-template error.
+    """
+    low = message.lower()
+    return "template" in low and ("not found" in low or "404" in low)
+
+
+def _template_build_hint(template: str, exc: Exception) -> click.ClickException:
+    """
+    Build the error that points the operator at the E2B template build
+    step — for both a missing template and an incompatible one.
+
+    :param template: The template name that failed to resolve.
+    :param exc: The underlying SDK exception (appended verbatim).
+    :returns: The launcher-contract error to raise.
+    """
+    return click.ClickException(
+        f"E2B sandbox creation failed: template '{template}' is unavailable or "
+        "incompatible. Build the Omnigent host image into an E2B template first "
+        "(`e2b template build` — see deploy/e2b/README.md), or set the correct "
+        f"template via sandbox.e2b.template / {TEMPLATE_ENV_VAR}. ({exc})"
+    )
+
+
 def _ensure_sdk() -> None:
     """
     Verify the E2B SDK is importable, with an install hint when not.
@@ -280,8 +314,11 @@ class _E2BRemoteProcess(RemoteProcess):
             # a transport error — CommandExitException IS a CommandResult,
             # so carry its exit code rather than raising.
             self._returncode = exc.exit_code
-        except BaseException as exc:
-            # Any other failure is a transport error surfaced from wait().
+        except Exception as exc:
+            # Any other failure is a transport error surfaced from wait();
+            # catch Exception (not BaseException) so KeyboardInterrupt /
+            # SystemExit still propagate. The finally below always runs, so
+            # the sentinel is queued regardless.
             self._error = exc
         finally:
             self._lines.put(None)
@@ -477,29 +514,38 @@ class E2BSandboxLauncher(SandboxLauncher):
             other than a clampable timeout rejection.
         """
         from e2b import Sandbox
-        from e2b.exceptions import SandboxException, TemplateException
+        from e2b.exceptions import AuthenticationException, SandboxException, TemplateException
 
         metadata = {"omnigent-name": name}
         try:
             return Sandbox.create(
                 template=template, timeout=timeout, metadata=metadata, envs=env_vars or None
             )
-        except TemplateException as exc:
-            # The most common first-run failure: the host image was never
-            # built into an E2B template. Point at the build step.
+        except AuthenticationException as exc:
+            # A bad/expired key (HTTP 401) raises AuthenticationException,
+            # which does NOT extend SandboxException — catch it explicitly so
+            # it surfaces as a credential hint instead of escaping raw.
             raise click.ClickException(
-                f"E2B sandbox creation failed: template '{template}' is unavailable. "
-                "Build the Omnigent host image into an E2B template first "
-                "(`e2b template build` — see deploy/e2b/README.md), or set the "
-                f"correct template via sandbox.e2b.template / {TEMPLATE_ENV_VAR}. "
-                f"({exc})"
+                "E2B authentication failed — check E2B_API_KEY (create a key at "
+                f"https://e2b.dev/dashboard). ({exc})"
             ) from exc
+        except TemplateException as exc:
+            # TemplateException is reserved for an incompatible/old template,
+            # not a missing one (that's a generic SandboxException, below).
+            raise _template_build_hint(template, exc) from exc
         except SandboxException as exc:
             cap = _lifetime_cap_from_error(str(exc))
-            if cap is None or cap >= timeout:
-                # SDK boundary: surface the provider's reason (quota, auth,
-                # …) as the launcher-contract error type so the managed-
-                # launch 502 carries it verbatim, not a generic message.
+            if cap is not None and cap < timeout:
+                pass  # account-cap rejection → fall through to the clamp-retry
+            elif _is_missing_template_error(str(exc)):
+                # The most common first-run failure: the host image was never
+                # built into an E2B template (E2B returns "404: template … not
+                # found" as a plain SandboxException). Point at the build step.
+                raise _template_build_hint(template, exc) from exc
+            else:
+                # SDK boundary: surface the provider's reason (quota, …) as the
+                # launcher-contract error type so the managed-launch 502 carries
+                # it verbatim, not a generic message.
                 raise click.ClickException(f"E2B sandbox creation failed: {exc}") from exc
         # The requested lifetime exceeds this account's maximum (e.g. a
         # Hobby account's 1 h cap vs the 24 h default) and E2B rejected it
@@ -560,8 +606,9 @@ class E2BSandboxLauncher(SandboxLauncher):
                 fg="yellow",
             )
         else:
-            # set_timeout clamps to the account cap silently (unlike create,
-            # which rejects), so report the REQUEST rather than claim a grant.
+            # set_timeout accepts an over-cap request without raising (unlike
+            # create, which rejects it — verified live on a capped account),
+            # so report the REQUEST rather than claim a grant.
             click.echo(
                 f"  → requested a {lifetime // 3600}h lifetime extension "
                 "(capped at the account maximum; E2B has no idle-stop disable)."
@@ -652,7 +699,14 @@ class E2BSandboxLauncher(SandboxLauncher):
 
         handle = self._resolve(sandbox_id)
         try:
-            process = handle.commands.run(f"bash -lc {shlex.quote(command)}", background=True)
+            # timeout=0 disables the SDK's default 60s per-command cap — this
+            # backs exec_foreground, which holds `omnigent host` open for the
+            # whole session; the cap would otherwise tear it down after 60s.
+            process = handle.commands.run(
+                f"bash -lc {shlex.quote(command)}",
+                background=True,
+                timeout=_COMMAND_NO_TIMEOUT,
+            )
         except SandboxException as exc:
             raise click.ClickException(
                 f"Could not start a streaming command on sandbox '{sandbox_id}': {exc}"

@@ -405,6 +405,10 @@ def install_fake_e2b_launcher(
         """Stand-in constructor recording the construction wiring."""
         fake.template = template
         fake.env = env
+        # Report the e2b provider so managed-host teardown's provider match
+        # (launcher.provider vs host.sandbox_provider) exercises the real path
+        # instead of the FakeSandboxLauncher default ("modal").
+        fake.provider = "e2b"  # type: ignore[misc]  # shadow the ClassVar per-instance
         return fake
 
     monkeypatch.setattr(e2b_mod, "E2BSandboxLauncher", _ctor)
