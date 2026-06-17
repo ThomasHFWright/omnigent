@@ -9320,15 +9320,12 @@ def _publish_policy_deny(session_id: str, reason: str) -> None:
     tests assert it, and native harnesses relay it to the model), so it is
     always carried in a ``response.output_text.delta``.
 
-    The deny is never persisted as a conversation item — the input gate
-    publishes it and returns without forwarding — so a ``message_id``-less
-    delta lands in the web reducer's response-scoped text path as an
-    un-reconciled "stray bubble" with no item to dedupe against. On the next
-    user submit the response switch re-finalizes that still-open text,
-    rendering the deny twice (observed on both native and non-native web
-    sessions). Stamping a unique ``message_id`` (matching how live streaming
-    text is tagged) routes it through the web's live-preview path instead,
-    where it folds into a single ``live:<id>`` block.
+    Input DENY callers also persist the same sentinel as an assistant
+    conversation item. This stream publish remains separate so live clients
+    still get immediate feedback before the handler returns. Stamping a unique
+    ``message_id`` (matching how live streaming text is tagged) routes the
+    delta through the web's live-preview path, where it folds into a single
+    ``live:<id>`` block rather than a response-scoped stray bubble.
 
     Safe for the other consumers: the REPL converts any ``output_text.delta``
     to a ``TextDelta`` regardless of ``message_id``; the ``/v1/responses`` API
@@ -9350,6 +9347,49 @@ def _publish_policy_deny(session_id: str, reason: str) -> None:
             "index": 0,
         },
     )
+
+
+async def _persist_policy_deny_sentinel(
+    session_id: str,
+    conv: Conversation,
+    reason: str,
+    conversation_store: ConversationStore,
+    agent_store: AgentStore,
+) -> None:
+    """
+    Persist the ``[Denied by policy: ...]`` sentinel as assistant history.
+
+    INPUT policy DENY returns synchronously and never forwards the user turn
+    to a runner, so no downstream stream relay can append the assistant-side
+    deny marker. Persisting the same assistant message shape used by OUTPUT
+    policy DENY keeps follow-up turns and the items API consistent with the
+    streamed deny users already see.
+
+    :param session_id: Session/conversation identifier.
+    :param conv: Conversation whose agent/model name tags the message.
+    :param reason: Human-readable deny reason from the policy verdict.
+    :param conversation_store: Store for item persistence.
+    :param agent_store: Store used to resolve the agent's display name.
+    """
+    import uuid
+
+    sentinel = f"{_DENY_SENTINEL_PREFIX}{reason}]"
+    agent = agent_store.get(conv.agent_id) if conv.agent_id else None
+    agent_name = agent.name if agent is not None else conv.agent_id or "policy"
+    item = NewConversationItem(
+        type="message",
+        response_id=f"deny_{uuid.uuid4().hex}",
+        data=parse_item_data(
+            "message",
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": sentinel}],
+                "agent": agent_name,
+            },
+        ),
+    )
+    await asyncio.to_thread(conversation_store.append, session_id, [item])
 
 
 async def _evaluate_input_policy(
@@ -16037,6 +16077,13 @@ def create_sessions_router(
                 reason = _input_verdict.get("reason", "Denied by policy")
                 _publish_status(session_id, "running")
                 _publish_policy_deny(session_id, reason)
+                await _persist_policy_deny_sentinel(
+                    session_id,
+                    conv,
+                    reason,
+                    conversation_store,
+                    agent_store,
+                )
                 _publish_status(session_id, "idle")
                 # Return the same shape the client expects from POST
                 # /events so postEvent doesn't throw on an unexpected
@@ -16057,6 +16104,13 @@ def create_sessions_router(
                 reason = _input_verdict.get("reason", "Denied by policy")
                 _publish_status(session_id, "running")
                 _publish_policy_deny(session_id, reason)
+                await _persist_policy_deny_sentinel(
+                    session_id,
+                    conv,
+                    reason,
+                    conversation_store,
+                    agent_store,
+                )
                 _publish_status(session_id, "idle")
                 return {"queued": False, "denied": True, "reason": reason}
         elif (

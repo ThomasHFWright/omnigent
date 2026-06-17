@@ -383,12 +383,6 @@ skips:
     cluster: subagent-supervisor-routing
     mode: skip
 
-  - id: tests/e2e/test_policies_e2e.py::test_policy_gate_deny_persists_to_history
-    reason: "Sessions API migration reaches inline INPUT DENY, but the synchronous DENY verdict is not persisted as an assistant sentinel in conversation_items; needs product-side persistence fix before unsuppressing."
-    issue: 476
-    cluster: policy-guardrails
-    mode: skip
-
   - id: tests/e2e/test_policies_e2e.py::test_streaming_api_explicit_approval_allows_llm
     reason: "Shard 3 bulk: streaming-API explicit approval. Policy / approval cluster."
     issue: 476

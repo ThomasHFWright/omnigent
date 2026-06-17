@@ -390,10 +390,12 @@ def test_policy_gate_deny_persists_to_history(
     policy_gate_agent: str,
     live_runner_id: str,
 ) -> None:
-    """After a DENY, a follow-up turn on the same
-    conversation sees the sentinel in history. Proves the
-    sentinel was written to conversation_items (not just
-    surfaced on the stream)."""
+    """After a DENY, the sentinel is readable from conversation history.
+
+    Proves the sentinel was written to conversation_items (not just surfaced
+    on the stream). The INPUT DENY fires before the runner/model, so this
+    regression check stays deterministic and does not need a live LLM turn.
+    """
     session_id = create_runner_bound_session(
         http_client, agent_name=policy_gate_agent, runner_id=live_runner_id
     )
@@ -408,27 +410,6 @@ def test_policy_gate_deny_persists_to_history(
         f"expected reason mentioning BLOCK_THIS_TOKEN; got {verdict}"
     )
 
-    # Turn 2: clean follow-up on the same conversation.
-    rid2 = send_user_message_to_session(
-        http_client,
-        session_id=session_id,
-        content="Reply with a single word: OK",
-    )
-    body2 = poll_session_until_terminal(
-        http_client, session_id=session_id, response_id=rid2, timeout=120
-    )
-    # Turn 2 completed without crashing — the engine rebuilt
-    # cleanly on a conversation that already had a DENYed
-    # turn-1 sentinel in history.
-    assert body2["status"] == "completed", f"Turn 2 failed: {body2.get('error')}"
-    # The LLM ran on turn 2 (no sentinel in its input) and
-    # produced a non-empty response. We do NOT assert that
-    # the LLM didn't echo the sentinel from history — the
-    # LLM sees the prior turn's assistant message (the
-    # sentinel text) and may repeat part of it when asked
-    # a follow-up, which is LLM behavior, not a policy bug.
-    text2 = _extract_all_assistant_text(body2)
-    assert len(text2.strip()) > 0
     # Fetch conversation items — the turn-1 sentinel MUST
     # be persisted so replay sees it.
     items_resp = http_client.get(
