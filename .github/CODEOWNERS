@@ -12,11 +12,12 @@
 #
 # Per-area owners are the top maintainers by COMBINED commit count across both
 # repos (databricks-eng/agent-framework full history + omnigent-ai/omnigent),
-# ~3-4 per area. Non-maintainer contributors are excluded, including authors of
-# cross-cutting changes that touch many areas (e.g. the sandbox/egress work),
-# which is why a broad one-off contributor is not listed as an area owner.
-# Note: GitHub requests ALL listed owners on a matching PR. Sanity-check
-# against real ownership and trim where a path has too many requests.
+# ~up to 4 per area. EXCLUDED from the count: mechanical tree-wide sweeps
+# (>100 files) -- the OSS migration import and the package-rename refactors --
+# since they touch every path and credit their author in every area without
+# implying ownership. Non-maintainer contributors are also excluded. Areas
+# whose only touches were sweeps have no entry and fall through to the default.
+# Worth a final human sanity-check.
 #
 # ROUND-ROBIN / even distribution: the `*` default points at a team
 # (@omnigent-ai/maintainers). Create that team and set its "Code review
@@ -36,24 +37,22 @@
 
 # Core agent runtime & harnesses
 /omnigent/inner/             @SabhyaC26 @TomeHirata @dhruv0811 @dbczumar
-/omnigent/runner/            @SabhyaC26 @TomeHirata @serena-ruan @dhruv0811
+/omnigent/runner/            @SabhyaC26 @TomeHirata @serena-ruan @fanzeyi
 /omnigent/runtime/           @TomeHirata @SabhyaC26 @dhruv0811 @ckcuslife-source
-/omnigent/server/            @dhruv0811 @dbczumar @ckcuslife-source @TomeHirata
-/omnigent/onboarding/        @SabhyaC26 @dhruv0811 @dbczumar @bbqiu
+/omnigent/server/            @dbczumar @dhruv0811 @ckcuslife-source @TomeHirata
+/omnigent/onboarding/        @SabhyaC26 @dbczumar @dhruv0811 @bbqiu
 /omnigent/policies/          @TomeHirata @SabhyaC26 @dhruv0811 @PattaraS
 /omnigent/spec/              @SabhyaC26 @dhruv0811 @ckcuslife-source
-/omnigent/llms/              @dhruv0811 @PattaraS @ckcuslife-source
+/omnigent/llms/              @PattaraS @ckcuslife-source
 /omnigent/host/              @fanzeyi @dhruv0811 @dbczumar @TomeHirata
-/omnigent/sandbox/           @dhruv0811 @SabhyaC26
-/omnigent/environments/      @dhruv0811
-/omnigent/db/                @dhruv0811 @SabhyaC26 @fanzeyi
-/omnigent/stores/            @serena-ruan @dhruv0811 @SabhyaC26 @TomeHirata
-/omnigent/terminals/         @dhruv0811 @SabhyaC26 @dbczumar @Edwinhe03
-/omnigent/tools/             @dbczumar @SabhyaC26 @dhruv0811 @PattaraS
-/omnigent/client_tools/      @dhruv0811
-/omnigent/entities/          @dhruv0811 @SabhyaC26 @daniellok-db @TomeHirata
+/omnigent/sandbox/           @SabhyaC26
+/omnigent/db/                @SabhyaC26 @fanzeyi
+/omnigent/stores/            @serena-ruan @SabhyaC26 @TomeHirata @fanzeyi
+/omnigent/terminals/         @SabhyaC26 @dbczumar @Edwinhe03
+/omnigent/tools/             @dbczumar @SabhyaC26 @PattaraS
+/omnigent/entities/          @SabhyaC26 @daniellok-db @TomeHirata
 /omnigent/repl/              @dhruv0811 @SabhyaC26 @dbczumar @TomeHirata
-/omnigent/resources/         @SabhyaC26 @dhruv0811 @fanzeyi @serena-ruan
+/omnigent/resources/         @SabhyaC26 @fanzeyi @serena-ruan
 
 # Deploy targets
 /deploy/                     @dhruv0811 @PattaraS @dbczumar @SabhyaC26
