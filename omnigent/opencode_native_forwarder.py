@@ -243,7 +243,7 @@ class OpenCodeNativeForwarder:
             session_id = info.get("id")
         if session_id is None:
             return True
-        return session_id == self._opencode_session_id
+        return bool(session_id == self._opencode_session_id)
 
     # --- dedupe / keys ---------------------------------------------------
 

@@ -121,7 +121,7 @@ class CodexWsTransport:
             return launch.external_session_id
         state = self._read_state()
         if state is not None:
-            return state.thread_id
+            return str(state.thread_id)
         raise RuntimeError("CodexWsTransport cannot resolve a thread id")
 
     async def send_prompt(self, session_id: str, prompt: NativePrompt) -> Mapping[str, Any]:
@@ -152,7 +152,7 @@ class CodexWsTransport:
                 turn_id = response.get("result", {}).get("turn", {}).get("id")
             if isinstance(turn_id, str) and turn_id and self._bridge_dir is not None:
                 update_active_turn_id(self._bridge_dir, turn_id)
-            return response
+            return dict(response)
         finally:
             await client.close()
 
