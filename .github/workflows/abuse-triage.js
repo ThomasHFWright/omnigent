@@ -20,6 +20,12 @@
 const NEW_ACCOUNT_DAYS = 7; // accounts younger than this are "throwaway-ish"
 const MIN_BODY_CHARS = 20; // real description shorter than this is "empty"
 const FLOOD_OPEN_PRS = 5; // this many simultaneous open PRs by one author
+const LLM_MIN_CONFIDENCE = 0.8; // only label on a confident LLM spam verdict
+const LLM_DIFF_CAP = 32000; // chars of diff sent to the LLM judge
+
+// Author associations that count as a first-time contributor -- the only tier
+// the (cost-bearing) LLM judge runs on.
+const FIRST_TIMER = ["FIRST_TIME_CONTRIBUTOR", "NONE", "FIRST_TIMER"];
 
 const DENY_COMMENT = [
   "This pull request was automatically closed because its author is on the",
@@ -113,6 +119,31 @@ module.exports = async ({ github, context, core, opts = {} }) => {
     const mine = open.filter((p) => (p.user && p.user.login || "").toLowerCase() === author).length;
     if (mine >= FLOOD_OPEN_PRS) reasons.push(`${mine} simultaneous open PRs`);
   } catch (e) { core.info(`flood check skipped: ${e.message}`); }
+
+  // --- Tier 2b: optional LLM content judge (advisory, cost-gated) ---
+  // Only when the cheap heuristics found NOTHING (no point spending if already
+  // flagged) AND the author is a first-timer (the spam-risk tier; returning
+  // CONTRIBUTORs have a track record). This bounds gateway spend to clean-
+  // looking first-timer PRs and catches *content* spam metadata can't see.
+  // Label-only -- a verdict NEVER closes (the diff is attacker-controlled and
+  // thus prompt-injectable). Any failure is swallowed (advisory).
+  if (!reasons.length && opts.llmClassify && FIRST_TIMER.includes(assoc)) {
+    try {
+      const { data: diff } = await github.rest.pulls.get({
+        owner, repo, pull_number: pr.number, mediaType: { format: "diff" },
+      });
+      const verdict = await opts.llmClassify({
+        title: pr.title || "",
+        body: pr.body || "",
+        diff: String(diff || "").slice(0, LLM_DIFF_CAP),
+      });
+      if (verdict && verdict.spam === true && (verdict.confidence || 0) >= LLM_MIN_CONFIDENCE) {
+        reasons.push(`LLM content judge (${verdict.confidence}): ${verdict.reason || "spam"}`);
+      } else {
+        core.info(`LLM content judge: not spam (${verdict && verdict.confidence}).`);
+      }
+    } catch (e) { core.info(`LLM content judge skipped: ${e.message}`); }
+  }
 
   if (reasons.length) {
     await ensureLabel(github, owner, repo, core);

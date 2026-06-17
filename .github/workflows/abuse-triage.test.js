@@ -13,9 +13,10 @@ async function run({
   openCount = 1,
   denylist = null,
   prCreatedAt = "2026-06-17T00:00:00Z",
+  llmVerdict = undefined, // if set, inject an llmClassify stub returning this
 } = {}) {
   const labels = [], comments = [];
-  let closed = false;
+  let closed = false, llmCalls = 0;
   const list = () => {}; list._tag = "open";
   const accountCreated = new Date(Date.parse(prCreatedAt) - accountAgeDays * 86400000).toISOString();
   const github = {
@@ -29,6 +30,7 @@ async function run({
       },
       pulls: {
         list,
+        get: async () => ({ data: "diff --git a/x b/x\n+spammy" }),
         update: async ({ state }) => { if (state === "closed") closed = true; },
       },
       users: { getByUsername: async () => ({ data: { created_at: accountCreated } }) },
@@ -37,13 +39,18 @@ async function run({
   const context = {
     repo: { owner: "omnigent-ai", repo: "omnigent" },
     payload: { pull_request: {
-      number: 1, user: { login: author }, author_association: assoc, body, created_at: prCreatedAt,
+      number: 1, user: { login: author }, author_association: assoc,
+      title: "a change", body, created_at: prCreatedAt,
     } },
   };
   const core = { info: () => {}, warning: (m) => console.log("WARN", m) };
-  const opts = denylist ? { denylist: new Set(denylist.map((s) => s.toLowerCase())) } : {};
+  const opts = {};
+  if (denylist) opts.denylist = new Set(denylist.map((s) => s.toLowerCase()));
+  if (llmVerdict !== undefined) {
+    opts.llmClassify = async () => { llmCalls++; if (llmVerdict instanceof Error) throw llmVerdict; return llmVerdict; };
+  }
   await script({ github, context, core, opts });
-  return { labels, comments, closed };
+  return { labels, comments, closed, llmCalls };
 }
 
 function assert(name, cond, detail) {
@@ -84,4 +91,30 @@ function assert(name, cond, detail) {
   // realBodyLength: a template-only body reads as ~empty.
   const tmpl = "<!-- describe your change -->\n## Summary\n\n- [ ] Bug fix\n- [ ] Feature\n";
   assert("realBodyLength strips template scaffolding", script.realBodyLength(tmpl) < 20, String(script.realBodyLength(tmpl)));
+
+  // --- Tier 2b: LLM content judge (cost-gated, advisory) ---
+
+  // Clean-looking first-timer + confident spam verdict -> labeled (not closed).
+  r = await run({ llmVerdict: { spam: true, confidence: 0.9, reason: "AI slop" } });
+  assert("LLM confident-spam -> flagged", !r.closed && r.labels.includes("spam-check") && r.llmCalls === 1, JSON.stringify(r));
+
+  // Clean-looking first-timer + not-spam verdict -> no label, LLM was consulted.
+  r = await run({ llmVerdict: { spam: false, confidence: 0.1 } });
+  assert("LLM not-spam -> not flagged", !r.closed && r.labels.length === 0 && r.llmCalls === 1, JSON.stringify(r));
+
+  // Low-confidence spam verdict -> not flagged.
+  r = await run({ llmVerdict: { spam: true, confidence: 0.4 } });
+  assert("LLM low-confidence spam -> not flagged", r.labels.length === 0 && r.llmCalls === 1, JSON.stringify(r));
+
+  // Returning CONTRIBUTOR -> LLM judge is NOT consulted (cost gate).
+  r = await run({ assoc: "CONTRIBUTOR", llmVerdict: { spam: true, confidence: 0.99 } });
+  assert("returning contributor skips the LLM judge", r.labels.length === 0 && r.llmCalls === 0, JSON.stringify(r));
+
+  // Already heuristic-flagged (empty body) -> LLM judge is NOT consulted.
+  r = await run({ body: "", llmVerdict: { spam: false, confidence: 0 } });
+  assert("heuristic-flagged PR skips the LLM judge", r.labels.includes("spam-check") && r.llmCalls === 0, JSON.stringify(r));
+
+  // LLM throws -> swallowed, no label, no close.
+  r = await run({ llmVerdict: new Error("gateway down") });
+  assert("LLM error is swallowed", !r.closed && r.labels.length === 0 && r.llmCalls === 1, JSON.stringify(r));
 })();
