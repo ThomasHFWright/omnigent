@@ -54,9 +54,10 @@ from tests.e2e.conftest import (
     create_runner_bound_session,
     poll_session_until_terminal,
     register_inline_agent,
-    reset_mock_llm,
     send_user_message_to_session,
 )
+
+pytestmark = pytest.mark.mock_only
 
 _COMPUTE_TOOL: dict[str, Any] = {
     "type": "function",
@@ -77,16 +78,6 @@ _COMPUTE_TOOL: dict[str, Any] = {
 _TERMINAL_COUNT = 10
 _FAN_OUT = 3
 _POST_THREAD_TIMEOUT_S = 30
-
-
-@pytest.fixture(autouse=True)
-def _isolated_mock_llm(mock_llm_server_url: str | None) -> Iterator[None]:
-    """Keep this file's keyed mock queues from leaking across the shard."""
-    reset_mock_llm(mock_llm_server_url)
-    try:
-        yield
-    finally:
-        reset_mock_llm(mock_llm_server_url)
 
 
 def _iter_sse(response: httpx.Response) -> Iterator[dict[str, Any]]:
@@ -229,8 +220,6 @@ def terminal_mock_agent(
     mock_llm_server_url: str | None,
 ) -> Iterator[tuple[str, str, str]]:
     """Register a mock-LLM agent with ``sys_terminal_*`` tools enabled."""
-    if mock_llm_server_url is None:
-        pytest.skip("requires the mock LLM server (mock mode)")
     if shutil.which("tmux") is None:
         pytest.skip("tmux not installed; sys_terminal_* tests need tmux on PATH")
 
@@ -379,9 +368,6 @@ def test_client_tool_outputs_fan_out_and_round_trip_in_parallel(
     fan-out, but does not execute real SDK Python tool bodies or assert
     wall-clock overlap like the removed e2e did.
     """
-    if mock_llm_server_url is None:
-        pytest.skip("requires the mock LLM server (mock mode)")
-
     values = ["a", "b", "c"]
     outputs_by_value = {value: f"done-{value}-{uuid.uuid4().hex[:6]}" for value in values}
     call_ids = {value: f"call_compute_{value}_{uuid.uuid4().hex[:6]}" for value in values}
