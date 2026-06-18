@@ -166,6 +166,12 @@ def _main_evaluate_policy(argv: list[str]) -> int:
         ) as client:
             resp = client.post(url, json=eval_request)
             resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        print(
+            f"omnigent codex evaluate-policy hook: Omnigent returned {exc.response.status_code}",
+            file=sys.stderr,
+        )
+        return _fail_closed()
     except httpx.HTTPError as exc:
         print(
             f"omnigent codex evaluate-policy hook: Omnigent request failed: {exc}",

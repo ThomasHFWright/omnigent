@@ -343,3 +343,14 @@ def test_fail_closed_non_tool_call_phases_fail_open(hook_event: str) -> None:
     the runner-side ``FAIL_CLOSED_PHASES`` (PR #163).
     """
     assert fail_closed_hook_output(hook_event) is None
+
+
+def test_fail_closed_unknown_event_fails_open() -> None:
+    """
+    An unrecognized hook event fails OPEN (``None``), not closed.
+
+    Only the exact ``PreToolUse`` event denies; any novel event name added
+    by a future harness must fall through to "no opinion" rather than
+    accidentally blocking — the conservative default for an unknown gate.
+    """
+    assert fail_closed_hook_output("SomeNewEvent") is None
