@@ -102,11 +102,20 @@ def _resolve_model(model: str | None) -> str:
     return model
 
 
+def _first_of(d: dict[str, Any], *keys: str, default: int = 0) -> int:
+    """Return the value of the first key present (and not None) in *d*."""
+    for k in keys:
+        v = d.get(k)
+        if v is not None:
+            return int(v)
+    return default
+
+
 def _normalize_cursor_usage(raw: dict[str, Any], model: str) -> dict[str, Any]:
     """Map Cursor SDK usage fields to the standard Omnigent usage dict."""
-    in_tok = raw.get("inputTokens") or raw.get("input_tokens") or 0
-    out_tok = raw.get("outputTokens") or raw.get("output_tokens") or 0
-    total = raw.get("totalTokens") or raw.get("total_tokens") or (in_tok + out_tok)
+    in_tok = _first_of(raw, "inputTokens", "input_tokens")
+    out_tok = _first_of(raw, "outputTokens", "output_tokens")
+    total = _first_of(raw, "totalTokens", "total_tokens", default=in_tok + out_tok)
     usage: dict[str, Any] = {
         "input_tokens": in_tok,
         "output_tokens": out_tok,
@@ -114,15 +123,15 @@ def _normalize_cursor_usage(raw: dict[str, Any], model: str) -> dict[str, Any]:
         "model": model,
     }
     # Carry cache breakdown if the backend reports it.
-    for src, dst in (
-        ("cacheReadInputTokens", "cache_read_input_tokens"),
-        ("cache_read_input_tokens", "cache_read_input_tokens"),
-        ("cacheCreationInputTokens", "cache_creation_input_tokens"),
-        ("cache_creation_input_tokens", "cache_creation_input_tokens"),
+    for dst, *sources in (
+        ("cache_read_input_tokens", "cacheReadInputTokens", "cache_read_input_tokens"),
+        ("cache_creation_input_tokens", "cacheCreationInputTokens", "cache_creation_input_tokens"),
     ):
-        val = raw.get(src)
-        if val:
-            usage[dst] = val
+        for src in sources:
+            val = raw.get(src)
+            if val is not None:
+                usage[dst] = val
+                break
     return usage
 
 

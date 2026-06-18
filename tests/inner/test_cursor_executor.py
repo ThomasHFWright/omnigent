@@ -76,10 +76,6 @@ def _install_fake_sdk(
         def __init__(self, script: dict[str, Any]) -> None:
             self._script = script
 
-        async def messages(self) -> Any:
-            for message in self._script.get("messages", []):
-                yield message
-
         async def events(self) -> Any:
             for message in self._script.get("messages", []):
                 yield SimpleNamespace(sdk_message=message, interaction_update=None)
@@ -850,3 +846,18 @@ async def test_run_turn_usage_none_when_no_turn_ended_update(
     assert len(completes) == 1
     assert completes[0].usage is None
     assert notified == []  # not called when there is no usage
+
+
+def test_normalize_cursor_usage_camel_takes_priority_over_snake() -> None:
+    raw = {"inputTokens": 100, "input_tokens": 999, "outputTokens": 50, "output_tokens": 888}
+    result = _normalize_cursor_usage(raw, "auto")
+    assert result["input_tokens"] == 100
+    assert result["output_tokens"] == 50
+
+
+def test_normalize_cursor_usage_zero_tokens_preserved() -> None:
+    raw = {"inputTokens": 0, "outputTokens": 0, "totalTokens": 0}
+    result = _normalize_cursor_usage(raw, "auto")
+    assert result["input_tokens"] == 0
+    assert result["output_tokens"] == 0
+    assert result["total_tokens"] == 0
