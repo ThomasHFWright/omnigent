@@ -524,14 +524,13 @@ _HOST_LAUNCH_RESULT_TIMEOUT_S = 10.0
 # user to answer in EITHER the web UI or the terminal, rather than
 # auto-resolving after a few minutes. The terminal prompt stays usable
 # the whole time: answering it closes the hook connection, which the
-# disconnect poll catches and resolves the web card. Held at INT_MAX
-# seconds (~68 years), effectively infinite, and kept in lockstep with
-# the hook subprocess httpx budget (``_PERMISSION_TIMEOUT_S`` in
+# disconnect poll catches and resolves the web card. Kept in lockstep
+# with the hook subprocess httpx budget (``_PERMISSION_TIMEOUT_S`` in
 # ``claude_native_hook``) and Claude Code's own command-hook
 # ``timeout`` (set in ``build_hook_settings``) so no single layer caps
 # the wait first. Empty 2xx body on timeout → Claude defers to its
 # built-in prompt (fail-ask).
-_CLAUDE_NATIVE_PERMISSION_HOOK_TIMEOUT_S = 2_147_483_647.0
+_CLAUDE_NATIVE_PERMISSION_HOOK_TIMEOUT_S = 86400.0
 
 # Tools whose prompts get the "Accept & allow all edits" UI affordance —
 # the exact set ``acceptEdits`` mode auto-approves.
@@ -572,12 +571,12 @@ def _allow_all_edits_eligible(tool_name: str, permission_mode: str | None) -> bo
 
 
 # Server-side wait budget for Codex app-server requests forwarded by
-# ``omnigent codex``. Held at INT_MAX seconds (~68 years), effectively
-# infinite, like the Claude permission hook: a terminal-side answer ends
-# the wait early via the app-server's explicit ``serverRequest/resolved``
-# notification, so the long park never blocks the TUI path — while a finite
-# cap would silently abandon any prompt a headless sub-agent left unanswered.
-_CODEX_NATIVE_ELICITATION_HOOK_TIMEOUT_S = 2_147_483_647.0
+# ``omnigent codex``. Held at one day like the Claude permission hook:
+# a terminal-side answer ends the wait early via the app-server's
+# explicit ``serverRequest/resolved`` notification, so the long park
+# never blocks the TUI path — while the old 300s cap silently abandoned
+# any prompt a headless sub-agent left unanswered for >5 minutes.
+_CODEX_NATIVE_ELICITATION_HOOK_TIMEOUT_S = 86400.0
 
 # ``external_elicitation_resolved`` can arrive just before the matching
 # Codex hook registers, and a web verdict can land between a severed

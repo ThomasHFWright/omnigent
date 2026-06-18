@@ -2006,14 +2006,13 @@ def test_augment_claude_args_registers_permission_command_hook(
     assert len(hooks) == 1
     hook = hooks[0]
     assert hook["type"] == "command"
-    # The command hook must carry an effectively-infinite timeout
-    # (INT_MAX seconds, ~68 years). Claude Code's default command-hook
-    # timeout (~60s) would otherwise kill the hook subprocess before the
-    # user answers the permission prompt in the web UI, flipping the card
-    # to "Resolved elsewhere" while the terminal prompt is still open. An
-    # ASK gate must block until a human answers; a failure here (missing
-    # key or a short value) means that premature auto-resolve has regressed.
-    assert hook["timeout"] == 2_147_483_647
+    # The command hook must carry a day-long timeout. Claude Code's
+    # default command-hook timeout (~60s) would otherwise kill the
+    # hook subprocess before the user answers the permission prompt in
+    # the web UI, flipping the card to "Resolved elsewhere" while the
+    # terminal prompt is still open. A failure here (missing key or a
+    # short value) means that premature auto-resolve has regressed.
+    assert hook["timeout"] == 86400
     assert "omnigent.claude_native_hook permission-request" in hook["command"]
     assert "--bridge-dir" in hook["command"]
     assert "Bearer xyz" not in hook["command"]

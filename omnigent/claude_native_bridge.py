@@ -1103,14 +1103,14 @@ def build_hook_settings(
         permission_hook: dict[str, Any] = {
             "type": "command",
             "command": shlex.join(permission_command_parts),
-            # Wait effectively forever for the verdict — INT_MAX seconds
-            # (~68 years). Claude Code's default command-hook timeout
-            # (~60s) would otherwise kill the hook subprocess long before
-            # the user answers, putting the prompt back in the TUI and
-            # flipping the web card to "Resolved elsewhere". An ASK gate
-            # must block until a human answers; it stays in lockstep with
-            # the subprocess/AP-side budgets so none caps first.
-            "timeout": 2_147_483_647,
+            # Wait up to a day for the verdict. Claude Code's default
+            # command-hook timeout (~60s) would otherwise kill the hook
+            # subprocess long before the user answers, putting the
+            # prompt back in the TUI and flipping the web card to
+            # "Resolved elsewhere". A day is effectively wait-forever
+            # for an interactive permission prompt; it stays in lockstep
+            # with the subprocess/AP-side budgets so none caps first.
+            "timeout": 86400,
         }
         hooks["PermissionRequest"] = [{"hooks": [permission_hook]}]
 

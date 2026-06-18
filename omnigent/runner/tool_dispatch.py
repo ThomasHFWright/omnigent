@@ -101,12 +101,11 @@ _SESSION_WRAPPER_LABEL_KEY = "omnigent.wrapper"
 # Read budget for runner→server message-send POSTs that are gated at the
 # recipient's REQUEST phase, which can PARK behind a human-approval ASK gate
 # (e.g. session_cost_budget) for the deciding policy's ``ask_timeout``. Held at
-# INT_MAX (~68 years) so the send WAITS for the verdict instead of severing the
-# parked gate at a short read timeout (a 30s cut previously fail-closed to DENY
-# and retried into duplicate approval cards). Fast connect (30s) so an
-# unreachable server still fails out promptly. Guarded by
-# tests/test_ask_timeout_infinite.py.
-_ASK_GATE_DELIVERY_READ_TIMEOUT_S: float = 2_147_483_647.0
+# one day (86400s) — matching that default — so the send WAITS for the verdict
+# instead of severing the parked gate at a short read timeout (a 30s cut
+# previously fail-closed to DENY). Fast connect (30s) so an unreachable server
+# still fails out promptly. Guarded by tests/test_ask_timeout_infinite.py.
+_ASK_GATE_DELIVERY_READ_TIMEOUT_S: float = 86400.0
 _ASK_GATE_DELIVERY_TIMEOUT = httpx.Timeout(_ASK_GATE_DELIVERY_READ_TIMEOUT_S, connect=30.0)
 
 # Read timeouts for the two MCP-proxy hops that carry a tool call back to the
@@ -1199,8 +1198,8 @@ async def _execute_subagent_tool(
             # This message is gated at the recipient's REQUEST phase, which can
             # PARK on a human ASK (e.g. session_cost_budget) up to the policy's
             # ``ask_timeout``. A 30s read budget severed that park → fail-closed
-            # /retry → duplicate cards. Wait for the real verdict (INT_MAX read,
-            # fast connect); a non-parking eval still returns immediately.
+            # /retry → duplicate cards. Wait for the real verdict (one-day read
+            # budget, fast connect); a non-parking eval still returns immediately.
             timeout=_ASK_GATE_DELIVERY_TIMEOUT,
         )
     except httpx.HTTPError as exc:
@@ -1345,8 +1344,8 @@ async def _send_to_existing_session(
             },
             # Same as the other message-send: gated at the recipient's REQUEST
             # phase, which can PARK on a human ASK up to the policy's
-            # ``ask_timeout``. Wait for the real verdict (INT_MAX read, fast
-            # connect) instead of severing at 30s and retrying into duplicates.
+            # ``ask_timeout``. Wait for the real verdict (one-day read budget,
+            # fast connect) instead of severing at 30s and retrying into duplicates.
             timeout=_ASK_GATE_DELIVERY_TIMEOUT,
         )
     except httpx.HTTPError as exc:

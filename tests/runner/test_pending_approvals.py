@@ -237,17 +237,17 @@ async def test_wait_for_user_approval_default_budget_gates_until_verdict() -> No
     back to :data:`pending_approvals._DEFAULT_WAIT_SECONDS`. That default was
     once 120s, which silently refused (``False``) any prompt the human didn't
     answer within two minutes — the card "auto-resolved" and the agent moved
-    on. The default is now effectively infinite, so the gate must KEEP
-    blocking until a real verdict arrives; ONLY the verdict — never the budget
-    elapsing on its own — may release it.
+    on. The default is now one day (matching the policy's ``ask_timeout``), so
+    the gate must KEEP blocking until a real verdict arrives; ONLY the verdict —
+    never the budget elapsing on its own — may release it.
 
     This exercises the exact default-budget path the real callers use (no
     ``timeout_seconds``) and asserts: (1) the gate is still parked after a
     real delay, and (2) a human verdict — and only that — releases it with
     the right value. A regression that shortens the default to anything
     inside the sleep window flips assertion (1); the companion drift-guard in
-    ``tests/test_ask_timeout_infinite.py`` pins the exact INT_MAX value so a
-    120s-style regression (too long to catch by waiting) still fails loudly.
+    ``tests/test_ask_timeout.py`` pins the exact one-day value so a 120s-style
+    regression (too long to catch by waiting) still fails loudly.
     """
     publishes: list[tuple[str, dict[str, Any]]] = []
 

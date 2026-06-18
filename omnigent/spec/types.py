@@ -26,20 +26,17 @@ if TYPE_CHECKING:
 DEFAULT_POLICY_CLASSIFIER_TIMEOUT = 30
 
 # Default timeout (seconds) for user approval on an ASK policy.
-# Effectively infinite — INT_MAX seconds (~68 years). An ASK is a
-# human-in-the-loop gate: the agent must block until a human answers
-# and must NEVER proceed on its own. A finite default lets the gate
-# expire (a shorter one even fails closed without any user input,
-# flipping the web card to a neutral "Resolved elsewhere"), which is
-# exactly the cost-policy bug where sub-agent tool calls slipped past
-# the gate after the old 30s/1-day window lapsed. Every wait-for-a-human
-# budget in the native path (the PermissionRequest / evaluate-policy
-# hook long-polls and their server-side mirrors) is pinned to the same
-# INT_MAX so no plumbing layer caps the wait before this policy does.
-# Headless/unattended agents that want a fast fail-closed should override
-# this per-policy via ``PolicySpec.ask_timeout`` or spec-wide via
-# ``GuardrailsSpec.ask_timeout`` (see polly's config). See POLICIES.md §7, §13.
-DEFAULT_ASK_TIMEOUT = 2_147_483_647
+# One day — an ASK is a human-in-the-loop gate and should outlive a
+# user stepping away, matching every other wait-for-a-human budget in
+# the native path (the PermissionRequest / evaluate-policy hook
+# long-polls and their server-side mirrors are all 86400). A shorter
+# default fails closed (DENY) without any user input, flipping the web
+# card to a neutral "Resolved elsewhere" — surprising for an
+# interactive session. Headless/unattended agents that want a fast
+# fail-closed should override this per-policy via ``PolicySpec.ask_timeout``
+# or spec-wide via ``GuardrailsSpec.ask_timeout`` (see polly's config).
+# See POLICIES.md §7, §13.
+DEFAULT_ASK_TIMEOUT = 86400
 
 
 @dataclass(frozen=True)

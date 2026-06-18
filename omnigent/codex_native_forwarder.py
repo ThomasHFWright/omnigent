@@ -62,14 +62,11 @@ _DELTA_FLUSH_INTERVAL_SECONDS = 0.05
 _DELTA_FLUSH_CHAR_THRESHOLD = 64
 _EXTERNAL_REASONING_EFFORT_CHANGE_TYPE = "external_reasoning_effort_change"
 _EXTERNAL_CODEX_COLLABORATION_MODE_CHANGE_TYPE = "external_codex_collaboration_mode_change"
-# Per-attempt client budget for the elicitation long-poll. Held at INT_MAX
-# seconds (~68 years), effectively infinite, matching the server-side wait
-# (``_CODEX_NATIVE_ELICITATION_HOOK_TIMEOUT_S``). At this scale neither side
-# expires in practice: an ASK gate resolves via the app-server's explicit
-# ``serverRequest/resolved`` notification (or a web verdict), not a timeout,
-# so the old "+5s so the server wins the tie" margin is moot. Also reused as
-# the total re-POST budget across severed long-polls.
-_CODEX_ELICITATION_REQUEST_TIMEOUT_SECONDS = 2_147_483_647.0
+# Per-attempt client budget for the elicitation long-poll, slightly above
+# the server-side wait (``_CODEX_NATIVE_ELICITATION_HOOK_TIMEOUT_S``) so
+# the server's own timeout (empty-body fail-ask) wins over a client cut.
+# Also reused as the total re-POST budget across severed long-polls.
+_CODEX_ELICITATION_REQUEST_TIMEOUT_SECONDS = 86405.0
 # Fail unreachable-server connects fast into the backoff loop instead of
 # inheriting the day-long read budget.
 _CODEX_ELICITATION_CONNECT_TIMEOUT_SECONDS = 30.0

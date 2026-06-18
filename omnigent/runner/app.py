@@ -112,13 +112,13 @@ _NATIVE_TERMINAL_START_FAILED_CODE = "native_terminal_start_failed"
 # ASK gate: policy evaluation (``_evaluate_policy_via_omnigent``) and sub-agent
 # wake-notice delivery (``_deliver_subagent_wake_post``). Both are gated at the
 # recipient's REQUEST/LLM/TOOL phase, which can hold for the deciding policy's
-# ``ask_timeout`` (default one day). Held at INT_MAX (~68 years) so the POST
-# WAITS for the real verdict instead of severing the parked gate at a short read
-# timeout — a 30s cut previously fail-closed to DENY (and retried into duplicate
-# approval cards). Fast connect (30s) so an unreachable server still fails out
-# promptly into the caller's fail-open/retry path. Guarded by
-# tests/test_ask_timeout_infinite.py.
-_ASK_GATE_DELIVERY_READ_TIMEOUT_S: float = 2_147_483_647.0
+# ``ask_timeout`` (default one day). Held at one day (86400s) — matching that
+# default — so the POST WAITS for the real verdict instead of severing the
+# parked gate at a short read timeout. A 30s cut previously fail-closed to DENY
+# (and the wake POST retried into duplicate approval cards). Fast connect (30s)
+# so an unreachable server still fails out promptly into the caller's
+# fail-open/retry path. Guarded by tests/test_ask_timeout_infinite.py.
+_ASK_GATE_DELIVERY_READ_TIMEOUT_S: float = 86400.0
 _ASK_GATE_DELIVERY_TIMEOUT = httpx.Timeout(_ASK_GATE_DELIVERY_READ_TIMEOUT_S, connect=30.0)
 # Terminal resource hosting the framework's own TUI (the Omnigent REPL,
 # ``omnigent attach``) for runner-hosted SDK sessions — the SDK mirror of
@@ -2988,8 +2988,8 @@ async def _evaluate_policy_via_omnigent(
             # budget here severed that long-poll after 30s — the server saw an
             # UPSTREAM DISCONNECT and failed the gate closed (DENY), so the
             # main (claude-sdk) agent's approval card auto-resolved while
-            # native sub-agents (whose hooks already wait ~forever) parked
-            # correctly. Hold the read budget at INT_MAX to match the native
+            # native sub-agents (whose hooks already wait the full day) parked
+            # correctly. Hold the read budget at one day to match the native
             # hooks' ``_EVALUATE_POLICY_TIMEOUT_S``; the server's ``ask_timeout``
             # remains the single real cap. Fast connect so an unreachable
             # server still fails out promptly into the fail-open path below.
@@ -4045,7 +4045,7 @@ async def _deliver_subagent_wake_post(
                 # day). A 30s read budget severed that park after 30s → the
                 # TimeoutError below retried → each retry re-posted the notice
                 # and parked ANOTHER gate → duplicate approval cards, and the
-                # gate never cleanly blocked. Hold the read budget at INT_MAX so
+                # gate never cleanly blocked. Hold the read budget at one day so
                 # this POST waits for the real verdict (one held connection, one
                 # card); fast connect so an unreachable parent runner still
                 # fails out into the bounded retry below.

@@ -34,13 +34,12 @@ from omnigent.native_policy_hook import (
 )
 
 # Client-side budget for the permission-request long-poll to AP. Held
-# at INT_MAX seconds (~68 years), effectively infinite, so the hook
-# subprocess waits indefinitely for a verdict from the web UI (or for
-# Claude to close the connection when the user answers in the terminal).
-# Kept in lockstep with the server-side
+# at one day so the hook subprocess waits ~indefinitely for a verdict
+# from the web UI (or for Claude to close the connection when the user
+# answers in the terminal). Kept in lockstep with the server-side
 # ``_CLAUDE_NATIVE_PERMISSION_HOOK_TIMEOUT_S`` and Claude Code's own
 # command-hook ``timeout`` so no single layer caps the wait early.
-_PERMISSION_TIMEOUT_S = 2_147_483_647.0
+_PERMISSION_TIMEOUT_S = 86400.0
 # First retry must land inside the server's re-park grace (proxies
 # sever idle long-polls); later retries back off.
 _PERMISSION_RETRY_INITIAL_BACKOFF_S = 1.0
@@ -59,10 +58,9 @@ _SESSION_ROTATION_TIMEOUT_S = 70.0
 # Evaluate-policy hooks normally return immediately, but a TOOL_CALL
 # ASK now parks server-side (URL-based elicitation) until a human
 # resolves it via the approve URL — so the client must wait as long as
-# the permission long-poll. Held at INT_MAX seconds (~68 years),
-# effectively infinite; the server caps the real wait via the deciding
-# policy's ``ask_timeout``.
-_EVALUATE_POLICY_TIMEOUT_S = 2_147_483_647.0
+# the permission long-poll. Held at one day; the server caps the real
+# wait via the deciding policy's ``ask_timeout``.
+_EVALUATE_POLICY_TIMEOUT_S = 86400.0
 _FORK_COMMAND_NAMES = frozenset({"/branch", "/fork"})
 _FORK_TRANSCRIPT_WAIT_S = 1.0
 _FORK_TRANSCRIPT_POLL_S = 0.05

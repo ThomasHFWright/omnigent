@@ -33,11 +33,11 @@ from omnigent.native_policy_hook import (
 # Budget for the policy evaluation POST. Normally a quick
 # request/reply, but a TOOL_CALL ASK now parks server-side (URL-based
 # elicitation) until a human resolves it via the approve URL, so the
-# client must wait as long as the permission long-poll. Held at INT_MAX
-# seconds (~68 years), effectively infinite; the server caps the real
-# wait via the deciding policy's ``ask_timeout``. Kept in lockstep with
-# the Claude-native hook's ``_EVALUATE_POLICY_TIMEOUT_S``.
-_EVALUATE_POLICY_TIMEOUT_S = 2_147_483_647.0
+# client must wait as long as the permission long-poll. Held at one
+# day; the server caps the real wait via the deciding policy's
+# ``ask_timeout``. Kept in lockstep with the Claude-native hook's
+# ``_EVALUATE_POLICY_TIMEOUT_S``.
+_EVALUATE_POLICY_TIMEOUT_S = 86400.0
 
 
 def main(argv: list[str] | None = None) -> int:

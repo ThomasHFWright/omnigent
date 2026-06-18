@@ -60,13 +60,12 @@ _POLICY_HOOK_MODULE = "omnigent.codex_native_hook"
 # ASK is now resolved server-side: ``POST /policies/evaluate`` parks the gate
 # (URL-based elicitation) until a human answers or the deciding policy's
 # ``ask_timeout`` elapses, and the hook's own request budget
-# (``_EVALUATE_POLICY_TIMEOUT_S``) is INT_MAX to match. Codex must wait at
-# least as long, or it kills the hook mid-park and the tool runs before the
-# verdict arrives — exactly the bug that let sub-agent tool calls slip past the
-# cost gate. Held at INT_MAX seconds (~68 years), effectively infinite, so the
-# server-side ``ask_timeout`` is the single cap, mirroring claude-native's
-# ``PermissionRequest`` hook (``timeout: 2_147_483_647``).
-_POLICY_HOOK_TIMEOUT_SECONDS = 2_147_483_647
+# (``_EVALUATE_POLICY_TIMEOUT_S``) is a day to match. Codex must wait at least
+# as long, or it kills the hook mid-park and the tool runs before the verdict
+# arrives — exactly the bug that let sub-agent tool calls slip past the cost
+# gate. Held at a day so the server-side ``ask_timeout`` is the single cap,
+# mirroring claude-native's ``PermissionRequest`` hook (``timeout: 86400``).
+_POLICY_HOOK_TIMEOUT_SECONDS = 86400
 # Hook trust statuses that allow a hook to execute (see codex
 # ``hook_trust_status``). Anything else means the hook is silently
 # skipped — which for a policy gate is a fail-open we must reject.
