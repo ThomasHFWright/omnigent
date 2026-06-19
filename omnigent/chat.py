@@ -2258,27 +2258,37 @@ async def _query_sessions_once(
     # sub-agents and are auto-woken by inbox completions across multiple
     # turns.
     #
-    # Ordering: await_turn() opens the SSE subscription BEFORE we call
-    # refresh() to check status. This closes the race where a turn
-    # completes in the window between the status-check and the subscribe:
-    # because we're already subscribed, its CompletedEvent arrives on our
-    # open stream and is never missed. If the session was already idle
-    # when we subscribed, await_turn() returns empty after the per-turn
-    # timeout; the subsequent refresh() then shows "idle" and we exit.
+    # Fast-exit: refresh() at the TOP of each iteration catches the common
+    # case (single-turn agent, session already idle) with one HTTP round-
+    # trip (~100 ms) instead of waiting up to _PER_TURN_TIMEOUT_S for a
+    # stream subscription to time out.
     #
-    # Timeouts: 120 s per turn (not 20 min) keeps a worst-case miss
-    # bounded. A global 1800 s wall-clock budget caps the entire loop
-    # regardless of turn count or individual delays.
+    # Race window: a turn MAY complete in the gap between the top-of-loop
+    # refresh() showing "waiting" and await_turn() opening its subscription.
+    # The window is O(ms) in practice (subagents take seconds). If it fires,
+    # await_turn() times out, the bottom refresh() shows "idle", and we exit
+    # — the only cost is one _PER_TURN_TIMEOUT_S wait and possibly missing
+    # that turn's text.
+    #
+    # Timeouts: 120 s per turn bounds the race-window penalty. A global
+    # 1800 s wall-clock budget caps the loop regardless of turn count.
     _MAX_EXTRA_TURNS = 30
     _PER_TURN_TIMEOUT_S = 120.0
     _LOOP_TIMEOUT_S = 1800.0
 
     async def _drain_extra_turns() -> None:
         for _ in range(_MAX_EXTRA_TURNS):
-            extra = await chat.await_turn(timeout=_PER_TURN_TIMEOUT_S)
+            # Fast-exit for single-turn agents.
             await chat.refresh()
+            if chat.status not in ("waiting", "running", "launching"):
+                return
+            # Session still active; subscribe before the next check to
+            # reduce (not eliminate) the race where a turn completes
+            # between refresh and subscribe.
+            extra = await chat.await_turn(timeout=_PER_TURN_TIMEOUT_S)
             if extra.text:
                 all_text_parts.append(extra.text)
+            await chat.refresh()
             if chat.status not in ("waiting", "running", "launching"):
                 return
         logger.warning(
