@@ -105,6 +105,7 @@ def test_async_tool_real_llm_e2e(
             "message starting with [System: task ...]. Quote the BODY of that "
             "message (the tool's return value) in your final reply."
         ),
+        mock_llm_base_url=f"{mock_llm_server_url}/v1",
         extra_config={
             "tools": {
                 "delayed_echo": {
@@ -214,6 +215,7 @@ def test_mixed_sync_and_async_tools_e2e(
             "You call tools as instructed and report results verbatim.\n"
             "ASYNC tools: use sys_call_async. SYNC tools: call directly."
         ),
+        mock_llm_base_url=f"{mock_llm_server_url}/v1",
         extra_config={
             "tools": {
                 "delayed_echo": {
@@ -316,6 +318,7 @@ def test_async_tool_failure_surfaces_e2e(
             "You call tools as instructed and report results verbatim.\n"
             "ASYNC tools: use sys_call_async."
         ),
+        mock_llm_base_url=f"{mock_llm_server_url}/v1",
         extra_config={
             "tools": {
                 "boom_async": {
