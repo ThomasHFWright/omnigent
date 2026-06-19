@@ -60,22 +60,23 @@ none of which any other UI test touches:
   previously only API-tested), with the child transcript accumulating
   both exchanges.
 
-The load-bearing assertions are the per-run nonces, which exist ONLY in the
-sub-agent's prompt (embedded at registration time by the
-`two_agent_chat_session` fixture): `verification_code` in its round-1 Answer
-reply and `question_code` in its round-2 Question reply. Any model can say
-"42" from world knowledge; the nonces can reach the parent's bubbles only via
-the real parent -> sub-agent -> inbox -> parent -> SSE -> UI pipeline.
+The load-bearing assertions are the per-run nonces baked into the mock LLM
+responses: `verification_code` in the mock child reply for round 1,
+`question_code` in the mock child reply for round 2. These nonces can reach
+the parent's bubbles only via the real parent -> sub-agent -> inbox -> parent
+-> SSE -> UI pipeline — the mock server never delivers them to the parent
+directly, so a rendering or routing regression will surface as a missing nonce.
 
 """
 
 from __future__ import annotations
 
+import json
 import re
 
-import pytest
 from playwright.sync_api import Page, expect
 
+from tests.e2e.conftest import configure_mock_llm
 from tests.e2e_ui.conftest import TwoAgentChatSession, open_right_rail
 
 _COMPOSER = "Ask the agent anything…"
@@ -86,7 +87,7 @@ _SUBAGENT_STATUS_DOT = '[data-testid="subagent-status-dot"]'
 
 # One relay = dispatch turn + sub-agent turn + auto-wake continuation,
 # three serial LLM calls, so nonce assertions get a generous budget.
-_RELAY_TIMEOUT_MS = 240_000
+_RELAY_TIMEOUT_MS = 30_000
 
 
 def _send(page: Page, text: str) -> None:
@@ -186,18 +187,96 @@ def _expect_child_transcript(page: Page, child_session_id: str, nonces: list[str
         expect(page.locator(_ASSISTANT, has_text=nonce).first).to_be_visible(timeout=30_000)
 
 
-# Nightly: six serial real-LLM turns (two rounds of dispatch + sub-agent +
-# auto-wake continuation), so it is too heavy and 429-sensitive for the PR
-# gate. The 600s budget overrides the suite-wide 300s default for the same
-# reason tests/e2e/test_named_sub_agent_persistence.py uses it: FMAPI
-# backoff stacks multiplicatively across the serial turns.
-@pytest.mark.nightly
-@pytest.mark.timeout(600)
 def test_two_agents_discuss_hitchhikers_guide(
     page: Page,
     two_agent_chat_session: TwoAgentChatSession,
+    mock_llm_server_url: str,
 ) -> None:
     chat = two_agent_chat_session
+
+    # Both the parent (Arthur) and child (Deep Thought) agents use
+    # ``model: mock-model``, which routes all LLM calls through the
+    # shared "default" queue.  The sequence across two relay rounds is:
+    #
+    #   Round 1
+    #     1. Parent call 1 → sys_session_send tool call (dispatch to deep_thought)
+    #     2. Parent call 2 → ack text after the tool result is received
+    #     3. Child  call 1 → answer text carrying verification_code
+    #     4. Parent call 3 → relay text echoing verification_code (auto-wake)
+    #
+    #   Round 2  (same child session, continued)
+    #     5. Parent call 4 → sys_session_send tool call (continue deep_thought)
+    #     6. Parent call 5 → ack text
+    #     7. Child  call 2 → answer text carrying question_code
+    #     8. Parent call 6 → relay text echoing question_code (auto-wake)
+    configure_mock_llm(
+        mock_llm_server_url,
+        [
+            # Round 1 — dispatch
+            {
+                "tool_calls": [
+                    {
+                        "call_id": "c1",
+                        "name": "sys_session_send",
+                        "arguments": json.dumps(
+                            {
+                                "agent": "deep_thought",
+                                "title": "Answer",
+                                "args": "What is the Answer?",
+                            }
+                        ),
+                    }
+                ]
+            },
+            {"text": "Dispatching to Deep Thought, waiting for the answer."},
+            # Child turn 1
+            {
+                "text": (
+                    f"The Answer to the Ultimate Question of Life, the Universe, "
+                    f"and Everything is 42. Verification code: {chat.verification_code}."
+                )
+            },
+            # Parent auto-wake relay (Round 1)
+            {
+                "text": (
+                    f"Deep Thought says: The Answer is 42. "
+                    f"Verification code: {chat.verification_code}."
+                )
+            },
+            # Round 2 — dispatch
+            {
+                "tool_calls": [
+                    {
+                        "call_id": "c2",
+                        "name": "sys_session_send",
+                        "arguments": json.dumps(
+                            {
+                                "agent": "deep_thought",
+                                "title": "Question",
+                                "args": "What is the Ultimate Question?",
+                            }
+                        ),
+                    }
+                ]
+            },
+            {"text": "Asking Deep Thought about the Ultimate Question."},
+            # Child turn 2
+            {
+                "text": (
+                    f"The Ultimate Question cannot be known yet; a greater computer "
+                    f"must be built. Question code: {chat.question_code}."
+                )
+            },
+            # Parent auto-wake relay (Round 2)
+            {
+                "text": (
+                    f"Deep Thought says: The Ultimate Question is unknown yet. "
+                    f"Question code: {chat.question_code}."
+                )
+            },
+        ],
+    )
+
     parent_url = f"{chat.base_url}/c/{chat.session_id}"
     page.goto(parent_url)
 
@@ -240,4 +319,4 @@ def test_two_agents_discuss_hitchhikers_guide(
     # Back in the parent, the continuation turns fully settled; guards
     # against the auto-wake turn wedging open after the reply streamed.
     page.goto(parent_url)
-    expect(page.locator(_WORKING)).to_have_count(0, timeout=60_000)
+    expect(page.locator(_WORKING)).to_have_count(0, timeout=30_000)
