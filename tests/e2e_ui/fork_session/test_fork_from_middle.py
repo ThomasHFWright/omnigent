@@ -26,6 +26,8 @@ import re
 import httpx
 from playwright.sync_api import Page, expect
 
+from tests.e2e.conftest import configure_mock_llm
+
 # Two distinct code words with no shared substring, so the kept/dropped
 # assertions can't satisfy each other. Only the KEPT word is part of the
 # turn the fork copies; the DROPPED word lives in the turn after the fork
@@ -41,6 +43,7 @@ def test_fork_from_middle_truncates_history(
     page: Page,
     seeded_session: tuple[str, str],
     runner_id: str,
+    mock_llm_server_url: str,
 ) -> None:
     """Fork from the first turn — the clone carries only history up to it.
 
@@ -61,6 +64,10 @@ def test_fork_from_middle_truncates_history(
         clone unbound, so a message would otherwise have no runner).
     """
     base_url, session_id = seeded_session
+    # 2 responses for the two source turns + 1 for the recall turn on the fork.
+    configure_mock_llm(
+        mock_llm_server_url, [{"text": "OK"}, {"text": "OK"}, {"text": _KEPT_MARKER}]
+    )
     page.goto(f"{base_url}/c/{session_id}")
 
     composer = page.get_by_placeholder("Ask the agent anything…")
@@ -71,13 +78,13 @@ def test_fork_from_middle_truncates_history(
     composer.fill(f"Remember this code word and reply with just OK: {_KEPT_MARKER}")
     page.get_by_role("button", name="Send", exact=True).click()
     assistant = page.locator(_ASSISTANT)
-    expect(assistant).to_have_count(1, timeout=60_000)
+    expect(assistant).to_have_count(1, timeout=10_000)
 
     # Turn 2 (DROPPED): plant the second code word AFTER the fork point.
     # Forking from turn 1's response must exclude this turn entirely.
     composer.fill(f"Now also remember this code word and reply with just OK: {_DROPPED_MARKER}")
     page.get_by_role("button", name="Send", exact=True).click()
-    expect(assistant).to_have_count(2, timeout=60_000)
+    expect(assistant).to_have_count(2, timeout=10_000)
 
     # Fork from the FIRST assistant response (the middle of the now
     # two-turn conversation). The action lives inside that bubble's action
@@ -133,8 +140,8 @@ def test_fork_from_middle_truncates_history(
     fork_composer.fill("What code word did I ask you to remember? Reply with the code word only.")
     page.get_by_role("button", name="Send", exact=True).click()
     fork_assistant = page.locator(_ASSISTANT)
-    expect(fork_assistant).to_have_count(2, timeout=60_000)
+    expect(fork_assistant).to_have_count(2, timeout=10_000)
 
     recall = fork_assistant.nth(1)
-    expect(recall).to_contain_text(_KEPT_MARKER, timeout=60_000)
+    expect(recall).to_contain_text(_KEPT_MARKER, timeout=10_000)
     expect(recall).not_to_contain_text(_DROPPED_MARKER)

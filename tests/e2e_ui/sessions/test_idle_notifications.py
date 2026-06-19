@@ -35,6 +35,8 @@ from __future__ import annotations
 
 from playwright.sync_api import Page, expect
 
+from tests.e2e.conftest import configure_mock_llm
+
 # Records constructed notifications and makes visibility/focus controllable
 # from the test via window.__hidden. Runs before any app script on every
 # navigation (add_init_script), so the SPA's feature detection and
@@ -213,6 +215,7 @@ def _send_prompt(page: Page) -> None:
 def test_idle_notification_fires_when_backgrounded(
     page: Page,
     seeded_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """
     A real ``running`` -> ``idle`` turn observed while the tab is
@@ -233,6 +236,7 @@ def test_idle_notification_fires_when_backgrounded(
         bound to the spawned runner.
     """
     base_url, session_id = seeded_session
+    configure_mock_llm(mock_llm_server_url, [{"text": "Hello! How can I help you today?"}])
     page.add_init_script(_HARNESS_INIT_SCRIPT)
     page.goto(f"{base_url}/c/{session_id}")
 
@@ -255,11 +259,10 @@ def test_idle_notification_fires_when_backgrounded(
         "window.dispatchEvent(new Event('blur'));"
     )
 
-    # Wait for the real turn to finish and the backgrounded transition to
-    # fire the notification. 90s budget covers cold-start LLM latency under
-    # Databricks routing without masking a true hang.
-    page.wait_for_function("window.__notifs.length > 0", timeout=90_000)
-    _wait_for_observed_session_status(page, session_id, "idle", timeout=90_000)
+    # Wait for the turn to finish and the backgrounded transition to fire the
+    # notification. Mock LLM responds immediately so a short budget suffices.
+    page.wait_for_function("window.__notifs.length > 0", timeout=10_000)
+    _wait_for_observed_session_status(page, session_id, "idle", timeout=10_000)
     # One more observation window catches duplicate-notification
     # regressions: the single running -> idle transition should produce
     # exactly one notification. A duplicate fires off a re-render right
@@ -271,10 +274,9 @@ def test_idle_notification_fires_when_backgrounded(
     assert first["title"] == _PROMPT, notifs
     # Body contract: the agent's final words as a trimmed,
     # capped preview when the best-effort fetch succeeds, else the
-    # generic fallback. The preview text is real LLM output, so assert
-    # the contract rather than exact content: non-empty either way, and
-    # a non-fallback body must respect the preview caps
-    # (``previewText`` in ap-web/src/lib/lastAssistantText.ts:
+    # generic fallback. Assert the contract rather than exact content:
+    # non-empty either way, and a non-fallback body must respect the
+    # preview caps (``previewText`` in ap-web/src/lib/lastAssistantText.ts:
     # ≤160 chars including the "…" elision marker, ≤3 lines).
     body = first["options"]["body"]
     assert isinstance(body, str) and body.strip(), notifs
@@ -287,6 +289,7 @@ def test_idle_notification_fires_when_backgrounded(
 def test_idle_notification_suppressed_when_foreground(
     page: Page,
     seeded_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """
     A real ``running`` -> ``idle`` turn observed while the tab stays
@@ -302,6 +305,7 @@ def test_idle_notification_suppressed_when_foreground(
         bound to the spawned runner.
     """
     base_url, session_id = seeded_session
+    configure_mock_llm(mock_llm_server_url, [{"text": "Hello! How can I help you today?"}])
     page.add_init_script(_HARNESS_INIT_SCRIPT)
     page.goto(f"{base_url}/c/{session_id}")
     page.mouse.click(5, 5)
@@ -311,7 +315,7 @@ def test_idle_notification_suppressed_when_foreground(
 
     # Observe the full running -> idle cycle while staying foreground.
     _wait_for_observed_session_status(page, session_id, "running", timeout=30_000)
-    _wait_for_observed_session_status(page, session_id, "idle", timeout=90_000)
+    _wait_for_observed_session_status(page, session_id, "idle", timeout=10_000)
 
     # Leave a short post-transition window to be sure no delayed
     # notification slips through.
@@ -322,6 +326,7 @@ def test_idle_notification_suppressed_when_foreground(
 def test_idle_notification_click_navigates_to_chat(
     page: Page,
     seeded_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """
     Clicking the OS notification routes into the session it was raised for.
@@ -349,6 +354,7 @@ def test_idle_notification_click_navigates_to_chat(
         bound to the spawned runner.
     """
     base_url, session_id = seeded_session
+    configure_mock_llm(mock_llm_server_url, [{"text": "Hello! How can I help you today?"}])
     page.add_init_script(_HARNESS_INIT_SCRIPT)
     page.goto(f"{base_url}/c/{session_id}")
 
@@ -366,8 +372,9 @@ def test_idle_notification_click_navigates_to_chat(
     page.get_by_test_id("new-chat-button").click()
     page.wait_for_url(lambda url: f"/c/{session_id}" not in url, timeout=10_000)
 
-    # The real turn completes off-screen and raises the notification.
-    page.wait_for_function("window.__notifObjects.length > 0", timeout=90_000)
+    # The turn completes off-screen and raises the notification.
+    # Mock LLM responds immediately so a short budget suffices.
+    page.wait_for_function("window.__notifObjects.length > 0", timeout=10_000)
 
     # Click it: the app's onClick focuses then navigates to the session.
     page.evaluate("window.__notifObjects[0].onclick()")

@@ -35,8 +35,9 @@ from __future__ import annotations
 import uuid
 
 import httpx
-import pytest
 from playwright.sync_api import Page, expect
+
+from tests.e2e.conftest import configure_mock_llm
 
 _COMPOSER = "Ask the agent anything…"
 _USER = '[data-testid="message-bubble"][data-role="user"]'
@@ -44,9 +45,6 @@ _ASSISTANT = '[data-testid="message-bubble"][data-role="assistant"]'
 _WORKING = '[data-testid="working-indicator"]'
 
 _TURNS = 5
-
-# A custom openai-agents turn is a single LLM call.
-_CUSTOM_TURN_TIMEOUT_MS = 90_000
 
 
 def _send(page: Page, text: str) -> None:
@@ -230,6 +228,7 @@ def _run_render_parity_journey(
     page: Page,
     base_url: str,
     session_id: str,
+    mock_llm_server_url: str,
     *,
     per_turn_timeout_ms: int,
 ) -> None:
@@ -238,6 +237,7 @@ def _run_render_parity_journey(
     :param page: The Playwright page.
     :param base_url: Spawned server base URL.
     :param session_id: The session/conversation id to chat in.
+    :param mock_llm_server_url: Mock LLM server base URL.
     :param per_turn_timeout_ms: How long to wait for each turn to land.
     """
     page.goto(f"{base_url}/c/{session_id}")
@@ -252,6 +252,7 @@ def _run_render_parity_journey(
         user_markers.append(user_marker)
         assistant_tokens.append(assistant_token)
 
+        configure_mock_llm(mock_llm_server_url, [{"text": assistant_token}])
         _send(page, _turn_prompt(index, user_marker, assistant_token))
         # The echoed token in an assistant bubble = the turn produced its
         # reply; only producible from this turn's prompt.
@@ -268,14 +269,14 @@ def _run_render_parity_journey(
     _assert_transcript_parity(base_url, session_id, user_markers, assistant_tokens)
 
 
-@pytest.mark.timeout(300)
 def test_custom_agent_message_render_parity(
     page: Page,
     custom_agent_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     base_url, session_id = custom_agent_session
     _run_render_parity_journey(
-        page, base_url, session_id, per_turn_timeout_ms=_CUSTOM_TURN_TIMEOUT_MS
+        page, base_url, session_id, mock_llm_server_url, per_turn_timeout_ms=10_000
     )
 
 

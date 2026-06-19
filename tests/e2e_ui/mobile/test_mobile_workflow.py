@@ -29,6 +29,8 @@ import httpx
 import pytest
 from playwright.sync_api import Page, ViewportSize, expect
 
+from tests.e2e.conftest import configure_mock_llm
+
 # iPhone-12-class portrait viewport — comfortably below the Tailwind
 # ``md`` breakpoint (768px) so every ``md:`` rule resolves to its
 # mobile branch.
@@ -253,6 +255,7 @@ def test_mobile_files_drawer_opens_seeded_file(
 def test_mobile_chat_send_and_response(
     page: Page,
     seeded_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """The composer streams an assistant reply at a phone viewport.
 
@@ -260,6 +263,8 @@ def test_mobile_chat_send_and_response(
     and message list stay usable on a phone (no rail stealing layout).
     """
     base_url, session_id = seeded_session
+    configure_mock_llm(mock_llm_server_url, [{"text": "pong"}])
+
     page.set_viewport_size(_MOBILE_VIEWPORT)
     page.goto(f"{base_url}/c/{session_id}")
 
@@ -269,5 +274,5 @@ def test_mobile_chat_send_and_response(
     page.get_by_role("button", name="Send", exact=True).click()
 
     assistant = page.locator('[data-testid="message-bubble"][data-role="assistant"]').first
-    expect(assistant).to_be_visible(timeout=60_000)
-    expect(assistant).to_have_text(re.compile(r"\S"), timeout=60_000)
+    expect(assistant).to_be_visible(timeout=10_000)
+    expect(assistant).to_have_text(re.compile(r"\S"), timeout=10_000)

@@ -39,6 +39,7 @@ import httpx
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.e2e.conftest import configure_mock_llm
 from tests.e2e_ui.conftest import _FILES_PROBE_ENV_AGENT_NAME
 
 # Unique marker so the copied-transcript assertion can't match UI chrome or
@@ -93,6 +94,7 @@ def test_fork_switch_agent_carries_history(
     target_name: str,
     expected_wrapper: str | None,
     expect_carry_history: bool,
+    mock_llm_server_url: str,
 ) -> None:
     """Fork + switch agent: lands on the target agent with history copied.
 
@@ -107,6 +109,7 @@ def test_fork_switch_agent_carries_history(
         fork history, currently claude/codex native).
     """
     base_url, session_id = seeded_session
+    configure_mock_llm(mock_llm_server_url, [{"text": "ok"}])
     target_agent_id = _agent_id_by_name(base_url, target_name)
 
     page.goto(f"{base_url}/c/{session_id}")
@@ -119,7 +122,7 @@ def test_fork_switch_agent_carries_history(
     composer.fill(f"Reply with one short word. Marker: {_MARKER}")
     page.get_by_role("button", name="Send", exact=True).click()
     assistant = page.locator('[data-testid="message-bubble"][data-role="assistant"]').first
-    expect(assistant).to_be_visible(timeout=60_000)
+    expect(assistant).to_be_visible(timeout=10_000)
 
     assistant.hover()
     page.get_by_test_id("fork-from-response").first.click()
@@ -190,6 +193,7 @@ def test_fork_switch_agent_carries_history(
 def test_fork_into_pi_labels_model_picker_pi(
     page: Page,
     seeded_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """Forking SDK → Pi labels the in-session model picker "Pi", not the slug.
 
@@ -206,6 +210,7 @@ def test_fork_into_pi_labels_model_picker_pi(
         ``hello_world`` (openai-agents SDK) source session.
     """
     base_url, session_id = seeded_session
+    configure_mock_llm(mock_llm_server_url, [{"text": "ok"}])
     pi_agent_id = _agent_id_by_name(base_url, "pi-native-ui")
 
     page.goto(f"{base_url}/c/{session_id}")
@@ -216,7 +221,7 @@ def test_fork_into_pi_labels_model_picker_pi(
     composer.fill(f"Reply with one short word. Marker: {_MARKER}")
     page.get_by_role("button", name="Send", exact=True).click()
     assistant = page.locator('[data-testid="message-bubble"][data-role="assistant"]').first
-    expect(assistant).to_be_visible(timeout=60_000)
+    expect(assistant).to_be_visible(timeout=10_000)
 
     # Fork from the response, switching the agent to Pi.
     assistant.hover()

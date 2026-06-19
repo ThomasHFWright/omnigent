@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from playwright.sync_api import Page, expect
 
+from tests.e2e.conftest import configure_mock_llm
+
 _COMPOSER = "Ask the agent anything…"
 _ASSISTANT = '[data-testid="message-bubble"][data-role="assistant"]'
 _USER = '[data-testid="message-bubble"][data-role="user"]'
@@ -64,15 +66,17 @@ def _send_turn(page: Page, text: str, turn: int) -> None:
     composer.fill(text)
     page.get_by_role("button", name="Send", exact=True).click()
     expect(page.locator(_USER)).to_have_count(turn, timeout=15_000)
-    expect(page.locator(_ASSISTANT)).to_have_count(turn, timeout=90_000)
-    expect(page.locator(_WORKING)).to_have_count(0, timeout=90_000)
+    expect(page.locator(_ASSISTANT)).to_have_count(turn, timeout=10_000)
+    expect(page.locator(_WORKING)).to_have_count(0, timeout=10_000)
 
 
 def test_jump_to_top_returns_to_first_message(
     page: Page,
     seeded_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     base_url, session_id = seeded_session
+    configure_mock_llm(mock_llm_server_url, [{"text": "hi"}, {"text": "hi"}, {"text": "hi"}])
     page.goto(f"{base_url}/c/{session_id}")
     page.set_viewport_size(_VIEWPORT)
 
@@ -108,9 +112,11 @@ def test_jump_to_top_returns_to_first_message(
 def test_jump_to_top_reveals_on_scroll_up_then_auto_hides(
     page: Page,
     seeded_session: tuple[str, str],
+    mock_llm_server_url: str,
 ) -> None:
     """Scrolling up surfaces the pill (no hover needed); pausing fades it out."""
     base_url, session_id = seeded_session
+    configure_mock_llm(mock_llm_server_url, [{"text": "hi"}, {"text": "hi"}, {"text": "hi"}])
     page.goto(f"{base_url}/c/{session_id}")
     page.set_viewport_size(_VIEWPORT)
 
