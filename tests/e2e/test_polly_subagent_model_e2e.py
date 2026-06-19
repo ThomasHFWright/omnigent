@@ -72,12 +72,13 @@ _DISPATCHED_MODELS = {
     "codex": "databricks-gpt-5-4-mini",
     "pi": "databricks-gpt-5-4",
 }
-# These are the PERSISTED model_override values after localization. Without
-# Databricks credentials the codex/claude_code workers resolve as subscription
-# providers, so their databricks- prefixes (if any) are stripped.
+# These are the PERSISTED model_override values after localization. In mock
+# mode, rewrite_sub_agent_harnesses=True rewrites codex → openai-agents
+# (SDK-based, no native binary). openai-agents routes through the gateway,
+# so databricks- prefix is preserved (no subscription-provider stripping).
 _EXPECTED_MODELS = {
     "claude_code": "claude-sonnet-4-6",
-    "codex": "gpt-5-4-mini",  # stripped from databricks-gpt-5-4-mini (subscription provider)
+    "codex": "databricks-gpt-5-4-mini",  # openai-agents harness; prefix preserved
     "pi": "databricks-gpt-5-4",  # pi is gateway-capable; prefix preserved
 }
 
