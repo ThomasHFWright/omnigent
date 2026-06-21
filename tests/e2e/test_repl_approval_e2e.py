@@ -38,6 +38,7 @@ import re
 import shutil
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,7 @@ from tests.e2e.conftest import (
     configure_mock_llm,
     get_mock_requests,
     reset_mock_llm,
+    spawn_mock_llm_server,
 )
 
 pexpect = pytest.importorskip("pexpect")
@@ -117,17 +119,132 @@ def _wait_for_function_call_outputs(
         time.sleep(poll_interval)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="module", autouse=True)
+def _occupy_canonical_local_port() -> Iterator[None]:
+    """
+    Hold the canonical local-server port (6767) for the whole module.
+
+    These tests give each test its own ``HOME`` (see :func:`repl_env`)
+    so every ``omnigent run`` spawns a *fresh* local server instead of
+    reusing a daemon one — necessary for per-test mock isolation. But
+    the daemon's server prefers the fixed canonical port 6767
+    (``omnigent.host.local_server.pick_local_port``), so 14 fresh
+    servers would churn through bind/reap/rebind on 6767 and
+    intermittently fail to bind → the REPL child crashes (``pexpect``
+    ``EOF``). ``pick_local_port`` falls back to an OS-assigned free port
+    when 6767 is already taken, so by holding 6767 here every per-test
+    server lands on its own free port — no contention. Best-effort: if
+    6767 is already occupied (a developer's own omnigent session), the
+    fallback is already in effect and we simply proceed.
+
+    :yields: Nothing; the socket is held open for the module's lifetime.
+    """
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 6767))
+    except OSError:
+        # Already taken — per-test servers already fall back to free
+        # ports, which is exactly what we want.
+        sock.close()
+        yield
+        return
+    try:
+        yield
+    finally:
+        sock.close()
+
+
+def _reap_omnigent_processes(home: str) -> None:
+    """
+    Kill every omnigent server/runner/daemon spawned under *home*.
+
+    ``omnigent run`` detaches its local server + runner (and a
+    ``_daemon_entry --local``) with ``start_new_session=True``, so a
+    test's ``/quit`` + child SIGKILL does NOT reap them — they outlive
+    the test, hold the canonical port (6767), and can fire a late LLM
+    call into the *next* test's mock (the #523 contamination flake).
+    Each per-test server tree is keyed on this test's unique fake
+    ``HOME`` (its ``--database-uri`` / ``--artifact-location`` paths and
+    its inherited ``HOME`` env both reference it), so match on that to
+    reap exactly this test's processes — never another test's or the
+    developer's own omnigent session.
+
+    :param home: The test's fake ``HOME`` path (unique per test).
+    """
+    import psutil
+
+    victims: list[psutil.Process] = []
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            cmdline = " ".join(str(c) for c in (proc.info.get("cmdline") or []))
+            if "omnigent" not in cmdline:
+                continue
+            matches = home in cmdline
+            if not matches:
+                try:
+                    matches = proc.environ().get("HOME") == home
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    matches = False
+            if matches:
+                victims.append(proc)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    for proc in victims:
+        with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+            proc.kill()
+    psutil.wait_procs(victims, timeout=5)
+
+
+@pytest.fixture
+def mock_llm_server_url(tmp_path: Path) -> Iterator[str]:
+    """
+    Per-test mock LLM server — overrides the session-scoped
+    :func:`tests.e2e.conftest.mock_llm_server_url`.
+
+    These tests spawn ``omnigent run`` subprocesses whose local
+    server/runner can outlive a test's teardown (spawned
+    ``start_new_session=True``; the daemon also reuses a server via a
+    pidfile keyed on ``$HOME/.omnigent``). A leaked server from one
+    test would otherwise fire a late LLM call into the *next* test's
+    mock and desync its response queue — the #523 cross-test
+    contamination flake, where a foreign ``"hi BANANA_TRIGGER"``
+    request (from ``test_repl_label_driven_ask_refuse_shows_sentinel``)
+    consumed a later test's ``tool_calls`` response and left
+    ``function_call_output`` empty.
+
+    A fresh mock per test binds its own port, so a stray call from a
+    prior test's leaked server lands on the now-dead old port instead
+    of this test's queue. Paired with the per-test ``HOME`` in
+    :func:`repl_env` (a fresh daemon pidfile per test → no server reuse
+    carrying a prior test's parked turn across the boundary).
+
+    :param tmp_path: Per-test temp dir for the mock's log.
+    :yields: This test's private mock server base URL.
+    """
+    with spawn_mock_llm_server(tmp_path) as base_url:
+        yield base_url
+
+
+@pytest.fixture
 def repl_env(
     llm_api_key: str,
     mock_llm_server_url: str,
-    tmp_path_factory: pytest.TempPathFactory,
-) -> dict[str, str]:
+    tmp_path: Path,
+) -> Iterator[dict[str, str]]:
     """
     Build the env dict for ``omnigent chat`` — OPENAI_API_KEY plus
     whatever PYTHONPATH the outer shell already provides (so
     ``omnigent`` + ``omnigent_client`` resolve to this
     worktree, not the sibling editable install).
+
+    Function-scoped (with a per-test ``HOME``) so each test gets its
+    own ``.omnigent`` runtime dir → its own local-server pidfile → a
+    fresh, isolated ``omnigent run`` server per test rather than a
+    daemon-reused one that carries a prior test's conversation/parked
+    turn across the boundary (the #523 contamination vector; see
+    :func:`mock_llm_server_url`).
 
     Redirects ``HOME`` to a temp dir seeded with
     ``.omnigent/config.yaml`` so the spawned interactive REPL starts
@@ -150,19 +267,19 @@ def repl_env(
     resolve, and ``OMNIGENT_SKIP_ONBOARD`` guards against any other
     first-run prompt (these tests exercise REPL approval, not onboarding).
 
-    ``OPENAI_BASE_URL`` is pointed at the session-scoped mock LLM
+    ``OPENAI_BASE_URL`` is pointed at this test's per-test mock LLM
     server so the REPL subprocess's inner OpenAI harness routes all
     completions through the mock instead of hitting ``api.openai.com``.
 
     :param llm_api_key: The API key for the LLM (``"mock-key"`` in
         mock mode).
-    :param mock_llm_server_url: Base URL of the mock LLM server,
+    :param mock_llm_server_url: Base URL of this test's mock LLM server,
         e.g. ``"http://127.0.0.1:12345"``.
-    :param tmp_path_factory: Pytest temp-path factory for the fake HOME.
+    :param tmp_path: Per-test temp dir; the fake HOME lives under it.
     :returns: Env mapping for ``pexpect.spawn``.
     """
     real_databrickscfg = Path.home() / ".databrickscfg"
-    fake_home = tmp_path_factory.mktemp("repl_home")
+    fake_home = tmp_path / "repl_home"
     config_home = fake_home / ".omnigent"
     config_home.mkdir(parents=True, exist_ok=True)
     (config_home / "config.yaml").write_text(
@@ -186,7 +303,12 @@ def repl_env(
         # sequences that throw off expect matches.
         "PROMPT_TOOLKIT_NO_CPR": "1",
     }
-    return env
+    yield env
+    # Reap the detached local server/runner/daemon this test spawned, so
+    # it can't outlive the test — holding port 6767 (breaking the next
+    # test's server spawn) or firing a late LLM call into another test's
+    # mock (#523 contamination). Keyed on this test's unique fake HOME.
+    _reap_omnigent_processes(str(fake_home))
 
 
 def _configure_mock_text(mock_llm_server_url: str, texts: list[str]) -> None:

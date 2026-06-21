@@ -26,6 +26,7 @@ These tests are excluded from the default ``pytest`` run via
 
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import signal
@@ -198,22 +199,27 @@ def using_mock_llm(request: pytest.FixtureRequest) -> bool:
     return request.config.getoption("--llm-api-key") is None
 
 
-@pytest.fixture(scope="session")
-def mock_llm_server_url(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> Iterator[str]:
+@contextlib.contextmanager
+def spawn_mock_llm_server(log_dir: Path) -> Iterator[str]:
     """
-    Start a mock LLM server for the test session.
+    Spawn a mock LLM server subprocess and yield its base URL.
 
-    Always started regardless of ``--llm-api-key`` so mock-only
-    e2e tests run alongside real-LLM tests in the same session.
-    The mock server is a lightweight FastAPI/uvicorn subprocess.
+    The single source of truth for booting the mock — shared by the
+    session-scoped :func:`mock_llm_server_url` fixture and any
+    per-test override that needs its OWN isolated mock (e.g. the REPL
+    e2e suites, where a leaked ``omnigent run`` server from one test
+    could otherwise fire a late LLM call into the next test's
+    session-shared mock and desync its response queue — the #523
+    cross-test contamination flake). A per-test mock binds a fresh
+    port, so a stray call from a prior test's leaked server lands on
+    the now-dead old port instead.
 
-    :param tmp_path_factory: Pytest temp path factory for logs.
-    :returns: The mock server base URL.
+    :param log_dir: Directory to write ``mock_llm.log`` into.
+    :yields: The mock server base URL, e.g. ``"http://127.0.0.1:54321"``.
+    :raises RuntimeError: If the server doesn't answer ``/stats`` in 10s.
     """
     mock_port = find_free_port()
-    mock_log = tmp_path_factory.mktemp("mock_llm_logs") / "mock_llm.log"
+    mock_log = log_dir / "mock_llm.log"
     log_handle = open(mock_log, "w")  # noqa: SIM115
 
     proc = subprocess.Popen(
@@ -257,6 +263,28 @@ def mock_llm_server_url(
             proc.kill()
             proc.wait(timeout=5)
         log_handle.close()
+
+
+@pytest.fixture(scope="session")
+def mock_llm_server_url(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[str]:
+    """
+    Start a mock LLM server for the test session.
+
+    Always started regardless of ``--llm-api-key`` so mock-only
+    e2e tests run alongside real-LLM tests in the same session.
+    The mock server is a lightweight FastAPI/uvicorn subprocess.
+
+    Suites that spawn ``omnigent run`` subprocesses (the REPL e2e
+    files) override this with a function-scoped fixture so each test
+    gets its OWN mock — see :func:`spawn_mock_llm_server`.
+
+    :param tmp_path_factory: Pytest temp path factory for logs.
+    :returns: The mock server base URL.
+    """
+    with spawn_mock_llm_server(tmp_path_factory.mktemp("mock_llm_logs")) as base_url:
+        yield base_url
 
 
 def configure_mock_llm(
