@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Update the committed UI-snapshot baseline from a PR's CI-rendered artifact.
 #
-# Visual baselines must be rendered on the pinned CI runner (screenshots drift
-# across OSes), so you can't regenerate them locally. When the UI Snapshot gate
-# fails on a PR -- typically a fork PR, which CI can't push to -- run this to
-# pull the runner-rendered image and update the baseline locally for review +
-# commit.
+# The no-Docker fallback for fork PRs. Baselines must be rendered in the pinned
+# Playwright image (screenshots differ across renderers); if you have Docker,
+# prefer regen_baseline_docker.sh, which reproduces that render locally. Without
+# Docker, the failing UI Snapshot run already rendered your change in that image,
+# so this pulls its `actual_` PNG into the baseline for review + commit.
 #
 # Usage:
 #   tests/e2e_ui/visual/update_baseline_from_pr.sh <pr-number> [--repo owner/name]
@@ -20,7 +20,7 @@ REPO="${REPO:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;
-    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "error: unknown flag $1" >&2; exit 2 ;;
     *) PR="$1"; shift ;;
   esac

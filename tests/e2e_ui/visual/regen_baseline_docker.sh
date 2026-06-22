@@ -24,6 +24,14 @@ set -euo pipefail
 # Keep these in lockstep with ui-snapshot.yml / ui-snapshot-update.yml.
 PW_IMAGE="mcr.microsoft.com/playwright/python:v1.60.0-noble@sha256:8ff591d613b01c884cc488339ed4318b4513eaf0c57a164a878ba49e70e3f384"
 NODE_IMAGE="node:20-bookworm"
+# The pinned digest is a multi-arch manifest, and CI renders the linux/amd64
+# variant. Force it here too so an arm64 host (e.g. Apple Silicon) renders the
+# same Chromium build -- otherwise the local PNG diverges from the gate. On
+# arm64 this runs under emulation (slower; needs Docker's binfmt/qemu).
+PLATFORM="linux/amd64"
+# Match CI's npm pin (.github/actions/setup-node) so the SPA bundle the build
+# produces is identical to the one the gate renders.
+NPM_VERSION="11.12.1"
 BUILD_OUTPUT="omnigent/server/static/web-ui"
 BASELINE="tests/e2e_ui/visual/snapshots/test_landing_snapshot/test_empty_landing_matches_baseline/test_empty_landing_matches_baseline[chromium][linux].png"
 
@@ -47,8 +55,8 @@ if [ "$SKIP_BUILD" = true ]; then
   echo "Reusing existing SPA build at $BUILD_OUTPUT."
 else
   echo "Building the ap-web SPA (Node container) ..."
-  docker run --rm -v "$PWD":/work -w /work/ap-web "$NODE_IMAGE" \
-    bash -c "npm ci --legacy-peer-deps --no-audit --no-fund && npm run build"
+  docker run --rm --platform "$PLATFORM" -v "$PWD":/work -w /work/ap-web "$NODE_IMAGE" \
+    bash -c "npm install -g npm@${NPM_VERSION} && npm ci --legacy-peer-deps --no-audit --no-fund && npm run build"
 fi
 
 echo "Rendering + rewriting the baseline in the pinned Playwright image ..."
@@ -56,7 +64,7 @@ echo "Rendering + rewriting the baseline in the pinned Playwright image ..."
 # design, so `|| true` is expected -- the git diff below is the real signal.
 # UV_PROJECT_ENVIRONMENT lives in the container (not the mounted repo) so no
 # root-owned .venv leaks onto the host.
-docker run --rm -v "$PWD":/work -w /work \
+docker run --rm --platform "$PLATFORM" -v "$PWD":/work -w /work \
   -e CI=1 \
   -e OMNIGENT_PW_NO_SANDBOX=1 \
   -e OMNIGENT_SKIP_WEB_UI=true \
@@ -70,8 +78,9 @@ docker run --rm -v "$PWD":/work -w /work \
   ' || true
 
 # Files Docker wrote are root-owned; hand them back so git add works unprivileged.
-docker run --rm -v "$PWD":/work "$PW_IMAGE" \
-  chown -R "$(id -u):$(id -g)" /work/tests/e2e_ui/visual /work/"$BUILD_OUTPUT" 2>/dev/null || true
+# Includes ap-web (node_modules + build intermediates the Node container wrote).
+docker run --rm --platform "$PLATFORM" -v "$PWD":/work "$PW_IMAGE" \
+  chown -R "$(id -u):$(id -g)" /work/tests/e2e_ui/visual /work/"$BUILD_OUTPUT" /work/ap-web 2>/dev/null || true
 
 echo
 if git diff --quiet -- "$BASELINE"; then
