@@ -776,6 +776,11 @@ class _FieldInputState:
     def __init__(self) -> None:
         self._future: asyncio.Future[str] | None = None
         self._field_name: str | None = None
+        # Set by ``cancel`` so the field-collection loop can tell an
+        # abort (Esc on the turn) apart from an empty submit and stop
+        # prompting rather than advancing to — and re-prompting for —
+        # the next field after the turn is already gone.
+        self._aborted: bool = False
 
     @property
     def pending(self) -> bool:
@@ -785,7 +790,17 @@ class _FieldInputState:
     def field_name(self) -> str | None:
         return self._field_name
 
+    @property
+    def aborted(self) -> bool:
+        """:returns: ``True`` if collection was cancelled mid-prompt."""
+        return self._aborted
+
     def begin(self, field_name: str) -> asyncio.Future[str]:
+        # A fresh prompt is never pre-aborted. Cleared here (not in the
+        # collection loop) so the flag spans exactly one begin/await
+        # cycle: the loop reads it the instant the await returns, and
+        # the only await between fields IS this ``begin``.
+        self._aborted = False
         if self._future is not None and not self._future.done():
             self._future.set_result("")
         self._field_name = field_name
@@ -801,6 +816,7 @@ class _FieldInputState:
         return True
 
     def cancel(self) -> None:
+        self._aborted = True
         if self._future is not None and not self._future.done():
             self._future.set_result("")
         self._future = None
@@ -2214,7 +2230,14 @@ class _SessionsChatReplAdapter:
             if content is not None:
                 resolve_payload["content"] = content
             elif schema.get("properties"):
-                prompted = await self._prompt_schema_fields(schema)
+                # Never leave the elicitation unresolved: any failure
+                # while prompting (or a user abort) declines, so the
+                # agent turn doesn't hang waiting on a verdict that the
+                # background task would otherwise never POST.
+                try:
+                    prompted = await self._prompt_schema_fields(schema)
+                except Exception:  # noqa: BLE001
+                    prompted = None
                 if prompted is not None:
                     resolve_payload["content"] = prompted
                 else:
@@ -2247,7 +2270,7 @@ class _SessionsChatReplAdapter:
         Returns the filled content dict, or ``None`` if the interactive
         state is unavailable (e.g. no ``_field_input_state`` wired up).
         """
-        from rich.text import Text  # noqa: PLC0415
+        from rich.text import Text
 
         fis = self._field_input_state
         host = self._host
@@ -2278,7 +2301,9 @@ class _SessionsChatReplAdapter:
                 label_parts.append(f" — {description}")
             hint_parts: list[str] = []
             if one_of and isinstance(one_of, list):
-                opts = [str(o.get("const", "")) for o in one_of if isinstance(o, dict) and "const" in o]
+                opts = [
+                    str(o.get("const", "")) for o in one_of if isinstance(o, dict) and "const" in o
+                ]
                 if opts:
                     hint_parts.append("/".join(opts))
             elif enum_vals and isinstance(enum_vals, list):
@@ -2294,49 +2319,89 @@ class _SessionsChatReplAdapter:
             hint = ", ".join(hint_parts)
             label_parts.append(f" [{hint}]")
 
-            host.output(
-                Text.from_markup(
-                    f"   [{fmt.accent}]{''.join(label_parts)}[/{fmt.accent}]",
-                ),
-            )
+            # Render as plain styled text, NOT markup: the label embeds
+            # server-controlled schema text (description, enum values,
+            # key) that ``Text.from_markup`` would parse as Rich tags —
+            # a stray ``[`` silently mangles the line and an unbalanced
+            # one raises ``MarkupError``, which would crash this
+            # background task and hang the elicitation.
+            host.output(Text("   " + "".join(label_parts), style=fmt.accent))
 
-            raw = await fis.begin(key)
-
-            # Use default when the user submits empty input.
-            if not raw.strip():
-                if default is not None:
-                    content[key] = default
-                elif key not in required:
-                    continue
-                else:
-                    return None
-                continue
-
-            # Parse according to type.
-            val: str | int | float | bool | None = raw.strip()
-            if prop_type == "boolean":
-                val = val.lower() in ("true", "1", "yes", "y")  # type: ignore[union-attr]
-            elif prop_type == "integer":
-                try:
-                    val = int(val)  # type: ignore[arg-type]
-                except ValueError:
-                    return None
-            elif prop_type == "number":
-                try:
-                    val = float(val)  # type: ignore[arg-type]
-                except ValueError:
+            # Re-prompt the same field on bad input rather than discarding
+            # everything: a single typo on field N shouldn't decline the
+            # whole form. The user aborts the turn with Esc (→ ``aborted``).
+            while True:
+                raw = await fis.begin(key)
+                if fis.aborted:
                     return None
 
-            # Validate enum constraints.
-            if one_of and isinstance(one_of, list):
-                valid = [o.get("const") for o in one_of if isinstance(o, dict) and "const" in o]
-                if val not in valid:
-                    return None
-            elif enum_vals and isinstance(enum_vals, list):
-                if val not in enum_vals:
-                    return None
+                stripped = raw.strip()
+                if not stripped:
+                    if default is not None:
+                        content[key] = default
+                    elif key in required:
+                        host.output(
+                            Text(
+                                f"     ↳ {key} is required — enter a value (Esc cancels)",
+                                style=fmt.warning,
+                            ),
+                        )
+                        continue
+                    # Optional with no default: leave unset.
+                    break
 
-            content[key] = val
+                # Parse according to type.
+                val: str | int | float | bool = stripped
+                if prop_type == "boolean":
+                    val = stripped.lower() in ("true", "1", "yes", "y")
+                elif prop_type == "integer":
+                    try:
+                        val = int(stripped)
+                    except ValueError:
+                        host.output(
+                            Text(
+                                f"     ↳ expected a whole number, got {stripped!r}",
+                                style=fmt.warning,
+                            ),
+                        )
+                        continue
+                elif prop_type == "number":
+                    try:
+                        val = float(stripped)
+                    except ValueError:
+                        host.output(
+                            Text(
+                                f"     ↳ expected a number, got {stripped!r}",
+                                style=fmt.warning,
+                            ),
+                        )
+                        continue
+
+                # Validate enum constraints.
+                if one_of and isinstance(one_of, list):
+                    valid = [
+                        o.get("const") for o in one_of if isinstance(o, dict) and "const" in o
+                    ]
+                    if val not in valid:
+                        host.output(
+                            Text(
+                                f"     ↳ choose one of: {', '.join(str(v) for v in valid)}",
+                                style=fmt.warning,
+                            ),
+                        )
+                        continue
+                elif enum_vals and isinstance(enum_vals, list):
+                    if val not in enum_vals:
+                        host.output(
+                            Text(
+                                f"     ↳ choose one of: {', '.join(str(v) for v in enum_vals)}",
+                                style=fmt.warning,
+                            ),
+                        )
+                        continue
+
+                content[key] = val
+                break
 
         return content
 
@@ -3541,10 +3606,10 @@ async def run_repl(
         # current field's value before any other routing.
         if field_input_state.pending:
             field_name = field_input_state.field_name or "field"
+            # Plain styled text: ``field_name`` (server schema) and
+            # ``text`` (user input) must not be parsed as Rich markup.
             host.output(
-                Text.from_markup(
-                    f"   [{fmt.muted}]› {field_name}: {text}[/{fmt.muted}]",
-                ),
+                Text(f"   › {field_name}: {text}", style=fmt.muted),
             )
             field_input_state.resolve(text)
             return
