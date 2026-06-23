@@ -28,6 +28,11 @@ from tests.e2e.conftest import (
     send_user_message_to_session,
 )
 
+# Default-executor sub-agent auto-collection requires server-side support added
+# after v0.2.0 (see test_named_sub_agent_persistence.py). The backwards-compat
+# matrix skips these against servers < 0.3.0; they run normally on main.
+pytestmark = pytest.mark.min_server_version("0.3.0")
+
 
 def _extract_all_text(body: dict[str, Any]) -> str:
     """

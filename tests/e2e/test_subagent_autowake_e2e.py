@@ -48,7 +48,13 @@ _WAKE_NOTICE_SIGNATURE = "waiting in inbox"
 _RESEARCHER_MARKER = "RESEARCHER_MARKER_2025"
 
 # Each test is 3+ serial gateway turns, so 600s absorbs potential backoff.
-pytestmark = pytest.mark.timeout(600, method="signal")
+# Auto-wake (idle parent re-dispatched when a child completes) is server-side
+# support added after v0.2.0 (see test_named_sub_agent_persistence.py). The
+# backwards-compat matrix skips these against servers < 0.3.0; they run on main.
+pytestmark = [
+    pytest.mark.timeout(600, method="signal"),
+    pytest.mark.min_server_version("0.3.0"),
+]
 
 
 @pytest.fixture(scope="session")

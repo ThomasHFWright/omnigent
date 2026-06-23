@@ -41,6 +41,11 @@ _tool_mod = _get_tool_set("coding")
 TOOLS: list[dict[str, Any]] = _tool_mod.TOOLS
 execute_tool = _tool_mod.execute_tool
 
+# Spawning sub-agents and auto-collecting their results requires server-side
+# support added after v0.2.0 (see test_named_sub_agent_persistence.py). The
+# backwards-compat matrix skips these against servers < 0.3.0; they run on main.
+pytestmark = pytest.mark.min_server_version("0.3.0")
+
 
 def _wait_for_markers(
     http_client: httpx.Client,

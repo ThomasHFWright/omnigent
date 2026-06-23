@@ -74,7 +74,15 @@ from tests.e2e.helpers import POLL_INTERVAL_S
 # thread default protects, because these tests block only in
 # main-thread httpx polls, so the worker survives and fixtures tear
 # down on a genuine timeout.
-pytestmark = pytest.mark.timeout(600, method="signal")
+# Sub-agent auto-wake (the parent is re-dispatched when a named child completes)
+# is server-side support that shipped after v0.2.0 — verified: these tests fail
+# against a v0.2.0 server even with a main runner (the result never reaches the
+# parent). The backwards-compat matrix skips them against servers < 0.3.0 via
+# min_server_version; they run normally on main and in the gate.
+pytestmark = [
+    pytest.mark.timeout(600, method="signal"),
+    pytest.mark.min_server_version("0.3.0"),
+]
 
 _FIXTURES_DIR = Path(__file__).resolve().parents[1] / "_fixtures" / "agents"
 _NAMED_FIXTURE = _FIXTURES_DIR / "named-sub-agent-test"

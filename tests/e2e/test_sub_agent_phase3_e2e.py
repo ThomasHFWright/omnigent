@@ -53,7 +53,13 @@ from tests.e2e.helpers import POLL_INTERVAL_S
 
 # Each test is 3+ serial gateway turns (dispatch + sub-agent + auto-wake),
 # so 600s absorbs potential backoff.
-pytestmark = pytest.mark.timeout(600, method="signal")
+# Sub-agent spawn + result auto-collection requires server-side support added
+# after v0.2.0 (see test_named_sub_agent_persistence.py). The backwards-compat
+# matrix skips these against servers < 0.3.0; they run normally on main.
+pytestmark = [
+    pytest.mark.timeout(600, method="signal"),
+    pytest.mark.min_server_version("0.3.0"),
+]
 
 # Stable marker strings checked in the session snapshot.
 _RESEARCHER_MARKER = "RESEARCHER_MARKER_2025"
