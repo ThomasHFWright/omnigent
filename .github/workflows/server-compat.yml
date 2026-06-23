@@ -19,6 +19,11 @@ name: Backwards-Compat
 #   schedule            every 4h; both default to the latest non-rc release tag.
 
 on:
+  # TEMP(backcompat validation): run on PR pushes so the backcompat jobs (both
+  # directions) execute on Actions before this merges (workflow_dispatch needs
+  # the file on the default branch). REVERT before merge — backcompat is meant
+  # to be dispatch/nightly only.
+  pull_request:
   workflow_dispatch:
     inputs:
       server_version:
