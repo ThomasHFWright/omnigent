@@ -42,6 +42,11 @@ def format_body(body: str) -> str:
 
     body = _append_section(
         body,
+        "Test Plan",
+        "Autoformat added this section; please describe how the change was tested.",
+    )
+    body = _append_section(
+        body,
         "ELI5",
         "<!-- Optional: explain the change in plain language. -->",
     )
@@ -52,12 +57,6 @@ def format_body(body: str) -> str:
     )
     body = _append_section(body, "Type of change", _checkbox_block(TYPE_LABELS))
     body = _append_section(body, "Test coverage", _checkbox_block(TEST_LABELS))
-    body = _append_section(
-        body,
-        "Coverage rationale",
-        "Autoformat added this section; please add commands run or explain why "
-        "coverage is sufficient.",
-    )
     return body.rstrip() + "\n"
 
 
