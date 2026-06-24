@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  ATTACHMENT_SIZE_LIMITS_MB,
-  classifyAttachment,
-  validateAttachments,
-} from "./attachments";
+import { ATTACHMENT_SIZE_LIMITS_MB, classifyAttachment, validateAttachments } from "./attachments";
 
 function makeFile(name: string, type: string, bytes = 10): File {
   return new File([new Uint8Array(bytes)], name, { type });
