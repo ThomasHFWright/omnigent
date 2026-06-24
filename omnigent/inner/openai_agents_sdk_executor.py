@@ -1081,9 +1081,15 @@ class OpenAIAgentsSDKExecutor(Executor):
         # Databricks-hosted endpoints don't support the responses.compact
         # API, and the compaction model must be an OpenAI model name.
         # Mock / local servers also lack the endpoint, so gate on the
-        # real OpenAI hostname.
+        # real OpenAI hostname (scheme + host, not a substring match).
         _base = str(getattr(self._client, "base_url", ""))
-        if not self._databricks and "api.openai.com" in _base:
+        try:
+            from urllib.parse import urlparse
+
+            _host = urlparse(_base).hostname or ""
+        except Exception:  # noqa: BLE001
+            _host = ""
+        if not self._databricks and _host == "api.openai.com":
             try:
                 from agents.memory import OpenAIResponsesCompactionSession
 
@@ -1092,8 +1098,11 @@ class OpenAIAgentsSDKExecutor(Executor):
                     underlying_session=underlying,  # type: ignore[arg-type]
                     client=self._client,
                 )
-            except (ImportError, AttributeError, ValueError):
-                pass
+            except (ImportError, AttributeError, ValueError) as exc:
+                logger.debug(
+                    "Compaction session setup failed, falling back to plain session: %s",
+                    exc,
+                )
         state = _AgentsSessionState(sdk_session=sdk_session)
         self._session_states[session_key] = state
         return state
