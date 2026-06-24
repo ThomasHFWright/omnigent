@@ -68,7 +68,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { AgentRowTooltip } from "@/components/AgentHoverCard";
 import { CreateAgentDialog } from "./CreateAgentDialog";
 import { buildAgentBundle, type AgentBundleInput } from "@/lib/agentBundle";
-import { createBundledSession } from "@/lib/sessionsApi";
+import { createBundledSession, launchRunner } from "@/lib/sessionsApi";
 
 // Preferred display order for the built-in agent picker. The server
 // returns agents newest-registered first (agent_store.list sorts by
@@ -1194,16 +1194,19 @@ export function NewChatLandingScreen() {
 
       if (effectiveAgentId === PENDING_AGENT_ID && pendingAgent) {
         // Custom agent path: build bundle client-side and use multipart POST.
+        // The multipart create only stores the agent + session rows — it does
+        // NOT launch a runner on the host. We must follow up with launchRunner
+        // (POST /v1/hosts/{id}/runners) to bind the session to a runner, the
+        // same way the fork-resume path does.
         const bundle = await buildAgentBundle(pendingAgent);
-        const metadata: Record<string, unknown> = {};
-        if (sandboxSelected) {
-          metadata.host_type = "managed";
-          metadata.workspace = composeSandboxWorkspace(sandboxRepoUrl, sandboxRepoBranch);
-        } else {
-          if (selectedHostId) metadata.host_id = selectedHostId;
-          if (workspaceTrimmed) metadata.workspace = workspaceTrimmed;
+        data = await createBundledSession(bundle, {});
+        // Launch the runner on the selected host.
+        if (!sandboxSelected && selectedHostId && workspaceTrimmed) {
+          const gitOpts = trimmedBranch
+            ? { branchName: trimmedBranch, baseBranch: baseBranch.trim() || undefined }
+            : undefined;
+          await launchRunner(selectedHostId, data.id, workspaceTrimmed, gitOpts);
         }
-        data = await createBundledSession(bundle, metadata as Parameters<typeof createBundledSession>[1]);
         // Clear pending agent after successful creation.
         setPendingAgent(null);
       } else {
