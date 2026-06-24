@@ -51,6 +51,7 @@ import {
   MessageContent,
 } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { BlockRenderer, FilePathAwareMessageResponse } from "@/components/blocks/BlockRenderer";
 import { CompactionMarker } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
@@ -311,6 +312,51 @@ export function mergePendingBubbles(committed: Bubble[], pending: Bubble[]): Bub
   }
   if (insertAt === committed.length) return [...committed, ...pending];
   return [...committed.slice(0, insertAt), ...pending, ...committed.slice(insertAt)];
+}
+
+type ElicitationItem = Extract<RenderItem, { kind: "elicitation" }>;
+
+// A pending elicitation is unanswered — only these are pinned.
+function isPendingElicitation(item: RenderItem): item is ElicitationItem {
+  return item.kind === "elicitation" && item.status === "pending";
+}
+
+// Pending elicitation cards are lifted out of the scrolling transcript and
+// pinned in a tray above the composer, so an outstanding question stays
+// reachable no matter how much text the agent streams after it (otherwise
+// stick-to-bottom scrolls the card up off the top of the viewport).
+// Collect them in document order: oldest first, so the newest pending card
+// sits at the BOTTOM of the stack, nearest the composer. Once answered, a
+// card drops out of this list (status flips to "responded") and flows back
+// into the transcript inline via `stripPinnedElicitations`.
+export function collectPendingElicitations(bubbles: Bubble[]): ElicitationItem[] {
+  const pending: ElicitationItem[] = [];
+  for (const bubble of bubbles) {
+    if (bubble.kind !== "assistant") continue;
+    for (const item of bubble.items) {
+      if (isPendingElicitation(item)) pending.push(item);
+    }
+  }
+  return pending;
+}
+
+// Drop the pinned (pending) elicitation cards from the transcript bubbles so
+// they don't render twice — once in the tray, once inline. Only clones the
+// assistant bubbles that actually carry a pinned card; every other bubble
+// keeps its reference so `BubbleView`'s memo holds. An assistant bubble left
+// with no items renders nothing (`AssistantBubble` returns null), so a
+// standalone elicitation bubble collapses cleanly while its gating user
+// message stays put. Returns the input array unchanged when nothing is
+// pinned, so the memo stays stable.
+export function stripPinnedElicitations(bubbles: Bubble[]): Bubble[] {
+  let result: Bubble[] | null = null;
+  for (let i = 0; i < bubbles.length; i += 1) {
+    const bubble = bubbles[i]!;
+    if (bubble.kind !== "assistant" || !bubble.items.some(isPendingElicitation)) continue;
+    if (result === null) result = [...bubbles];
+    result[i] = { ...bubble, items: bubble.items.filter((it) => !isPendingElicitation(it)) };
+  }
+  return result ?? bubbles;
 }
 
 // Whether a user bubble should carry the author's avatar badge (and the
@@ -1264,6 +1310,17 @@ function MainAgentSurface({
   );
   const nav = useUserMessageNav(userMessageIds);
 
+  // Pending elicitation cards are pinned in a tray above the composer (so an
+  // outstanding question never scrolls off the top) and removed from the
+  // transcript to avoid rendering twice. Answered cards leave the tray and
+  // reappear inline at their natural spot. `streamBubbles` keeps `bubbles`'
+  // reference when nothing is pinned, so the common case allocates nothing.
+  const pinnedElicitations = useMemo(() => collectPendingElicitations(bubbles), [bubbles]);
+  const streamBubbles = useMemo(
+    () => (pinnedElicitations.length === 0 ? bubbles : stripPinnedElicitations(bubbles)),
+    [bubbles, pinnedElicitations.length],
+  );
+
   // Cmd+Alt+↑/↓ (Ctrl+Alt on win/linux) — guarded so the composer's
   // own unmodified ArrowUp/Down history-recall still works.
   useEffect(() => {
@@ -1427,7 +1484,7 @@ function MainAgentSurface({
               )
             ) : (
               <>
-                {bubbles.map((bubble) => (
+                {streamBubbles.map((bubble) => (
                   <BubbleView key={bubbleKey(bubble)} bubble={bubble} />
                 ))}
                 {/* Working… shimmer between send and first rendered block.
@@ -1486,6 +1543,26 @@ function MainAgentSurface({
         containerRef={conversationRef}
         onReply={(text) => setReplyQuotes((prev) => [...prev, text])}
       />
+
+      {/* Pending elicitation cards, pinned just above the composer so an
+          outstanding question stays visible no matter how much text the
+          agent streams after it. Lives OUTSIDE the scroll container (like
+          the composer) and mirrors its column width. Capped height with
+          internal scroll keeps a tall stack of pending cards from crowding
+          out the transcript; newest sits at the bottom, nearest the
+          composer. Answered cards drop back inline (`stripPinnedElicitations`). */}
+      {pinnedElicitations.length > 0 && (
+        <div
+          data-testid="pinned-elicitations"
+          className={cn("mx-auto w-full px-6", CHAT_COLUMN_WIDTH)}
+        >
+          <div className="flex max-h-[45vh] flex-col gap-2 overflow-y-auto pb-2">
+            {pinnedElicitations.map((item) => (
+              <ElicitationCard key={item.elicitationId} item={item} />
+            ))}
+          </div>
+        </div>
+      )}
 
       <Composer
         disabled={disabled}
