@@ -172,14 +172,13 @@ class _SessionSnapshot(Protocol):
 # by iTerm2/Warp/tmux). Updating the hint without updating the
 # binding would desync the user's expectation from what actually
 # fires.
-WELCOME_HINTS = [
-    "/help help",
-    "/quit exit",
-    "Ctrl+O debug",
-    "Ctrl+T show tools",
-    "Esc cancel",
-    "Ctrl+C exit",
-]
+# NOTE: keep this list short enough that the bottom toolbar
+# (``{model · state} … hints … state: sleeping``) fits the e2e PTY
+# width (120 cols). Adding an entry here can wrap the toolbar and
+# split the ``state: sleeping`` sync marker the e2e harness waits on
+# (tests/e2e/omnigent/_pexpect_harness.py). /quit discoverability is
+# served by the grouped ``/help`` output instead.
+WELCOME_HINTS = ["/help help", "Ctrl+O debug", "Ctrl+T show tools", "Esc cancel", "Ctrl+C exit"]
 
 # Per-request item count for ``client.sessions.list_items``
 # pagination. Matches the server's
