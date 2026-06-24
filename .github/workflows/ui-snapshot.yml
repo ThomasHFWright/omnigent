@@ -63,7 +63,7 @@ env:
 
 jobs:
   ui-snapshot:
-    name: UI Snapshot (visual baselines)
+    name: UI Snapshot (visual baselines) [non-blocking]
     runs-on: ubuntu-24.04
     # Render in the digest-pinned Playwright image (browsers + fonts baked in),
     # so the committed baseline and the PR comparison are byte-identical and a
