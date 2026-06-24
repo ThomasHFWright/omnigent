@@ -918,3 +918,61 @@ def test_resolve_image_file_keeps_specific_mime(
     assert image_block["image_url"].startswith("data:image/png;base64,"), (
         f"Expected image/png data URI, got: {image_block['image_url'][:60]}"
     )
+
+
+# ── Attachment upload limits ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("content_type", "expected_mb"),
+    [
+        ("image/png", 5),
+        ("image/jpeg", 5),
+        ("image/webp", 5),
+        ("application/pdf", 20),
+        ("text/plain", 10),
+        ("text/markdown", 10),
+        ("text/x-python", 10),
+        ("text/typescript", 10),
+        ("application/json", 10),
+        ("application/x-ipynb+json", 10),
+    ],
+)
+def test_attachment_upload_limit_allowed_types(content_type: str, expected_mb: int) -> None:
+    """Images, PDF, and text-like types get their per-type byte cap."""
+    from omnigent.runtime.content_resolver import attachment_upload_limit
+
+    assert attachment_upload_limit(content_type) == expected_mb * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",  # pptx
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # docx
+        "application/vnd.ms-excel",
+        "application/zip",
+        "application/octet-stream",
+        "audio/mpeg",
+        "video/mp4",
+    ],
+)
+def test_attachment_upload_limit_rejects_unsupported_types(content_type: str) -> None:
+    """Office/binary/media types are not uploadable (None ⇒ caller 415s)."""
+    from omnigent.runtime.content_resolver import attachment_upload_limit
+
+    assert attachment_upload_limit(content_type) is None
+
+
+def test_attachment_upload_limits_are_under_global_ceiling() -> None:
+    """Every per-type limit stays within the global request-size backstop."""
+    from omnigent.runtime.content_resolver import (
+        MAX_ATTACHMENT_UPLOAD_BYTES,
+        MAX_IMAGE_UPLOAD_BYTES,
+        MAX_PDF_UPLOAD_BYTES,
+        MAX_TEXT_UPLOAD_BYTES,
+    )
+
+    assert MAX_IMAGE_UPLOAD_BYTES <= MAX_ATTACHMENT_UPLOAD_BYTES
+    assert MAX_PDF_UPLOAD_BYTES <= MAX_ATTACHMENT_UPLOAD_BYTES
+    assert MAX_TEXT_UPLOAD_BYTES <= MAX_ATTACHMENT_UPLOAD_BYTES

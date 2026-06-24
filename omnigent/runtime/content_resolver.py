@@ -91,6 +91,63 @@ _EXTRA_MIME_TYPES: dict[str, str] = {
 }
 
 
+# ── Attachment upload limits ──────────────────────────────────────────
+# Uploaded attachments are inlined into the model context as base64 (see
+# :func:`resolve_content_references`) and re-sent every turn, so sizes are
+# bounded well under the model's context budget and the provider's API
+# limits — Anthropic accepts images up to ~5 MB, PDFs up to ~32 MB / 100
+# pages, and ~32 MB per request total. The per-type caps below keep a
+# single attachment usable across a multi-turn conversation; the global
+# ceiling backstops the total request size after base64 inflation (~1.33x).
+# Mirrored client-side in ap-web/src/lib/attachments.ts — keep in sync.
+MAX_IMAGE_UPLOAD_BYTES: int = 5 * 1024 * 1024
+MAX_PDF_UPLOAD_BYTES: int = 20 * 1024 * 1024
+MAX_TEXT_UPLOAD_BYTES: int = 10 * 1024 * 1024
+MAX_ATTACHMENT_UPLOAD_BYTES: int = 25 * 1024 * 1024
+
+# ``application/*`` MIME types we treat as text-like. The rest of the
+# text-like surface is ``text/*`` (covered by the prefix check) — these
+# are the text-bearing ``application/*`` types code/data files resolve to.
+_TEXT_LIKE_APPLICATION_MIMES: frozenset[str] = frozenset(
+    {
+        "application/json",
+        "application/javascript",
+        "application/jsonl",
+        "application/x-ndjson",
+        "application/x-ipynb+json",
+    }
+)
+
+
+def attachment_upload_limit(content_type: str) -> int | None:
+    """
+    Max upload size (bytes) for *content_type*, or ``None`` if the type is
+    not an allowed attachment.
+
+    Allowed: images, PDF, and text-like files (``text/*`` plus a few
+    text-bearing ``application/*`` types — JSON, JS, JSONL, notebooks).
+    Office / binary formats (pptx, docx, xlsx, zip, …) return ``None`` and
+    are rejected at upload: the model can't read their raw bytes
+    (Anthropic's base64 ``document`` source accepts only PDF), so inlining
+    them only produces garbled UTF-8 or — for large files — an oversized,
+    context-blowing request. Callers reject ``None`` with HTTP 415.
+
+    :param content_type: The resolved MIME type, e.g. ``"image/png"``.
+        Use :func:`_resolve_content_type` to derive it from the upload's
+        declared type + filename first.
+    :returns: The per-type byte limit (still subject to
+        :data:`MAX_ATTACHMENT_UPLOAD_BYTES`), or ``None`` when the type is
+        not an allowed attachment.
+    """
+    if content_type.startswith("image/"):
+        return MAX_IMAGE_UPLOAD_BYTES
+    if content_type == "application/pdf":
+        return MAX_PDF_UPLOAD_BYTES
+    if content_type.startswith("text/") or content_type in _TEXT_LIKE_APPLICATION_MIMES:
+        return MAX_TEXT_UPLOAD_BYTES
+    return None
+
+
 def resolve_content_references(
     items: list[ConversationItem],
     file_store: FileStore,
