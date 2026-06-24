@@ -1,22 +1,16 @@
 name: E2E UI Tests
 
-# Runs the Playwright UI suite against a freshly built ap-web SPA.
-#
-# Most tests use the in-process mock LLM (the openai-agents hello_world harness)
-# and need NO secrets, so they run on ALL PRs -- same-repo AND fork -- like
-# ci.yml. A handful (the `native_gateway` marker: native Claude Code / Codex /
-# Cursor render-parity + approval tests) drive a REAL CLI against the live
-# Databricks gateway, so they need LLM_API_KEY / GATEWAY_BASE_URL. Those run
-# ONLY on the nightly schedule / workflow_dispatch (on a trusted ref where
-# secrets are available) -- never on PRs -- so PRs need no secrets and no
-# fork-e2e mirror. The native CLI install + gateway-config steps are gated to
-# that path too.
+# Runs the Playwright UI suite against a freshly built ap-web SPA, split across
+# a 3-shard matrix. The whole suite (including the native Claude/Codex/Cursor
+# render-parity tests) runs against the in-process mock LLM and needs NO
+# secrets, so it runs on ALL PRs -- same-repo AND fork -- directly, like ci.yml.
+# (The native_*_mock_session fixtures use the real gateway only when LLM_API_KEY
+# is set, e.g. local dev; CI never sets it.)
 #
 # Triggers:
-#   pull_request        ALL PRs (same-repo + fork): mock tests only
-#                       (`-m "not native_gateway"`). Draft PRs skip.
-#   schedule            09:00 UTC daily: full suite incl. native_gateway.
-#   workflow_dispatch   manual run (same coverage as schedule).
+#   pull_request        ALL PRs (same-repo + fork). Draft PRs skip.
+#   schedule            09:00 UTC daily, alongside nightly.yml.
+#   workflow_dispatch   manual run. Input `branch` selects a non-main ref.
 
 on:
   pull_request:
@@ -37,8 +31,8 @@ permissions:
   contents: read
 
 concurrency:
-  # PRs key by number, dispatch by branch (so re-runs cancel); schedule keys
-  # by SHA so each merge to `main` gets its own run.
+  # PRs key by number, dispatch by branch (so re-runs cancel); push /
+  # schedule key by SHA so each merge to `main` gets its own run.
   group: e2e-ui-${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.branch || github.sha }}
   cancel-in-progress: true
 
@@ -68,8 +62,9 @@ jobs:
   gate:
     uses: ./.github/workflows/security-gate.yml
 
-  # Shard matrix (e2e-shard-matrix.sh, shared with e2e.yml). Fork PRs run by
-  # default; draft PRs resolve to an empty matrix.
+  # Compute the shard matrix once. A skipped run (draft / fork pull_request)
+  # yields an EMPTY matrix -> zero shard jobs -> no skipped placeholder check.
+  # Shared with e2e.yml via e2e-shard-matrix.sh (only NUM_SHARDS differs).
   setup:
     name: setup
     needs: gate
@@ -97,21 +92,17 @@ jobs:
     name: E2E UI Tests (shard ${{ matrix.shard_id }}/${{ matrix.num_shards }})
     # Draft PRs resolve to an EMPTY matrix in `setup`, so no shard runs for
     # them. Fork PRs DO run (mock LLM, no secrets) -- same as ci.yml.
+    # `ready_for_review` re-fires when a draft is converted.
     needs: setup
     runs-on: ubuntu-latest
-    # 30 min covers the nightly run, where the heavy native_gateway tests
-    # (per-test timeout up to 900s) join the mock suite. PR runs (mock only)
-    # finish well under this.
-    timeout-minutes: 30
+    timeout-minutes: 20
     strategy:
       # One red shard shouldn't cancel siblings -- we want every shard's signal.
       fail-fast: false
       max-parallel: 3
+      # Shards from `setup`; [] when skipped. Shard check names live in
+      # merge-ready/required.sh -- keep in sync with NUM_SHARDS above.
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
-    env:
-      # Nightly / dispatch = the full pass incl. real-gateway native_gateway
-      # tests. PRs run mock-only and need no secrets.
-      IS_NIGHTLY: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
 
     steps:
       - name: Checkout
@@ -137,7 +128,6 @@ jobs:
         with:
           path: .venv
           key: venv-${{ runner.os }}-${{ hashFiles('.python-version') }}-${{ hashFiles('uv.lock') }}
-
       - name: Install project + dev extras
         run: uv sync --locked --extra all --extra dev
 
@@ -162,7 +152,8 @@ jobs:
             ${{ runner.os }}-playwright-
 
       - name: Install Playwright Chromium
-        run: uv run playwright install --with-deps chromium
+        run: |
+          uv run playwright install --with-deps chromium
 
       - name: Build ap-web SPA
         # Build BEFORE pytest: Vite's emptyOutDir clobbers the static dir,
@@ -176,16 +167,10 @@ jobs:
           npm ci --legacy-peer-deps --no-audit --no-fund
           npm run build
 
-      # --- native coding-agent enablement (nightly only) ---
-      # These steps are needed only by the native_gateway tests, which run only
-      # on schedule / dispatch. They reference the gateway secret, so PR runs
-      # (which skip them) never touch secrets.
-      - name: Set LLM credentials
-        if: ${{ env.IS_NIGHTLY == 'true' }}
-        run: echo "LLM_API_KEY=${{ secrets.LLM_API_KEY }}" >> "$GITHUB_ENV"
-
+      # Native coding-agent harness enablement: the next steps let the
+      # native render-parity tests boot a real Claude Code / Codex CLI. The
+      # rest of the e2e-ui suite (openai-agents) ignores them.
       - name: Install Claude Code CLI
-        if: ${{ env.IS_NIGHTLY == 'true' }}
         # claude-code 2.1.170, NOT the 2.1.124 in .github/ci-deps: 2.1.124
         # doesn't recognise the hook events the native bridge configures and
         # shows a blocking startup modal that swallows the first message.
@@ -200,7 +185,6 @@ jobs:
           echo "${GITHUB_WORKSPACE}/.cc-cli/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Install Codex CLI
-        if: ${{ env.IS_NIGHTLY == 'true' }}
         # @openai/codex at the .github/ci-deps pin (same build as e2e.yml's
         # codex leg). `scripts: null` means no postinstall, so --ignore-scripts
         # is a safety no-op; the native binary ships in the package and goes on
@@ -212,84 +196,30 @@ jobs:
           npm install --ignore-scripts --no-audit --no-fund @openai/codex@0.139.0
           echo "${GITHUB_WORKSPACE}/.codex-cli/node_modules/.bin" >> "$GITHUB_PATH"
 
-      - name: Configure native-claude/codex gateway provider
-        if: ${{ env.IS_NIGHTLY == 'true' }}
-        # Required only by the native render-parity tests (claude, codex), which
-        # run nightly only. The approval tests (test_exit_plan_mode,
-        # test_ask_user_question) were migrated to mock LLM (#1015) and need no
-        # gateway.
-        # The native CLIs derive their gateway auth from omnigent provider
-        # config. Register the Databricks gateway as the default for both
-        # anthropic (Claude Code) and openai (Codex); the token reaches each
-        # CLI and the openai-agents harness via an env:LLM_API_KEY ref, so
-        # no literal secret hits disk.
-        env:
-          GATEWAY_BASE_URL: ${{ secrets.GATEWAY_BASE_URL }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-        run: |
-          mkdir -p "$HOME/.omnigent"
-          # The Anthropic Messages surface and the Codex Responses surface live
-          # at different paths off the same workspace host. GATEWAY_BASE_URL is
-          # <host>/serving-endpoints (the OpenAI-compatible surface); strip that
-          # suffix to recover the bare host for the codex /ai-gateway path.
-          host="${GATEWAY_BASE_URL%/serving-endpoints}"
-          cat > "$HOME/.omnigent/config.yaml" <<EOF
-          providers:
-            databricks-gateway:
-              kind: gateway
-              default: [anthropic, openai]
-              anthropic:
-                # Databricks serves the Anthropic Messages surface at
-                # <host>/serving-endpoints/anthropic (see
-                # omnigent/inner/pi_executor.py: claude_base_url). GATEWAY_BASE_URL
-                # is <host>/serving-endpoints (the OpenAI-compatible surface), so
-                # the /anthropic suffix is required — without it Claude Code POSTs
-                # to .../serving-endpoints/v1/messages and gets no reply.
-                base_url: "${GATEWAY_BASE_URL}/anthropic"
-                api_key_ref: "env:LLM_API_KEY"
-                # The default model id is read from models.default (not a
-                # top-level default_model key). Without it the provider
-                # resolves model=None, Claude Code launches with no --model and
-                # falls back to its built-in 'claude-sonnet-4-6', which the
-                # Databricks gateway rejects (the endpoint name is the
-                # 'databricks-' prefixed id).
-                models:
-                  default: databricks-claude-sonnet-4-6
-              openai:
-                # Databricks serves the Codex Responses surface at
-                # <host>/ai-gateway/codex/v1 (see omnigent/inner/codex_executor.py:
-                # _databricks_codex_base_url), NOT the /serving-endpoints
-                # OpenAI-compatible surface. wire_api must be 'responses' — codex
-                # >= 0.137 rejects 'chat' at config load.
-                base_url: "${host}/ai-gateway/codex/v1"
-                api_key_ref: "env:LLM_API_KEY"
-                wire_api: responses
-                # The codex model id the e2e codex leg pins (tests/_model_pools).
-                models:
-                  default: databricks-gpt-5-4-mini
-          EOF
-
       - name: Run UI e2e tests
-        # --ui-skip-build: the SPA was built in the setup composite.
+        # --ui-skip-build: the SPA was built in the previous step.
         # --tracing/--screenshot/--video default to off; retain-on-failure
         # keeps green runs cheap while capturing artifacts on failures.
-        # The conftest's live_server fixture points the server subprocess at the
-        # in-process mock LLM, so PR runs need no credentials. On nightly the
-        # native render-parity tests resolve api_key_ref "env:LLM_API_KEY" from
-        # the ~/.omnigent/config.yaml written above -- LLM_API_KEY is exported to
-        # $GITHUB_ENV by the nightly-gated "Set LLM credentials" step.
+        # The conftest's live_server fixture injects OPENAI_BASE_URL=mock/v1
+        # and OPENAI_API_KEY=mock-key into the runner subprocess env, so the
+        # openai-agents harness and policy classifier both hit the mock — no
+        # real credentials needed. Native render-parity tests write their own
+        # mock provider config via native_*_mock_session at terminal-creation
+        # time, so no ~/.omnigent/config.yaml is written in CI either.
         env:
+          # Scheduled / manually dispatched runs are the full pass;
+          # PR and push runs exclude @pytest.mark.nightly tests.
+          NIGHTLY_FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
           SHARD_ID: ${{ matrix.shard_id }}
           NUM_SHARDS: ${{ matrix.num_shards }}
         run: |
-          # PR runs are mock-only: exclude @native_gateway (real gateway, nightly
-          # only) and @nightly. Nightly/dispatch runs the full pass. @visual is
-          # always excluded -- it has its own pinned-runner gate (ui-snapshot.yml)
-          # and would flake on font drift here.
-          if [[ "$IS_NIGHTLY" == "true" ]]; then
-            MARKER="not visual"
-          else
-            MARKER="not native_gateway and not visual and not nightly"
+          # Always exclude @visual: the UI diff snapshot runs in its own
+          # pinned-runner gate (ui-snapshot.yml) so its baseline matches the
+          # comparison environment; on this unpinned ubuntu-latest it would
+          # flake on font drift. Add the nightly exclusion for PR/push runs.
+          MARKER="not visual"
+          if [[ "$NIGHTLY_FULL" != "true" ]]; then
+            MARKER="$MARKER and not nightly"
           fi
           # --splits/--group partition the suite via a strided slice (see
           # pytest_collection_modifyitems in tests/e2e_ui/conftest.py), which
@@ -326,7 +256,6 @@ jobs:
         # Claude Code's transcript JSONL lives under ~/.claude/projects (a
         # hidden dir the artifact glob misses); stage it under /tmp. NOT
         # copying ~/.claude.json: its apiKeyHelper embeds the gateway token.
-        # No-op on PR runs (native tests are nightly-only).
         if: failure()
         run: |
           mkdir -p /tmp/claude-home-dump
@@ -336,7 +265,6 @@ jobs:
         # Codex's per-session rollout JSONLs live under the bridged CODEX_HOME
         # at ~/.omnigent/codex-native/<hash>/codex-home/sessions; stage only
         # the *.jsonl. NOT copying config.toml: its auth command embeds the token.
-        # No-op on PR runs (native tests are nightly-only).
         if: failure()
         run: |
           mkdir -p /tmp/codex-home-dump

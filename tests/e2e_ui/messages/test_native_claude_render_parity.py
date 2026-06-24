@@ -21,6 +21,7 @@ extra LLM calls Claude Code makes internally.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 
 import pytest
@@ -42,8 +43,6 @@ from .test_message_render_parity import (
 )
 
 _log = logging.getLogger(__name__)
-
-pytestmark = pytest.mark.native_gateway
 
 _TERMINAL_VIEW = '[data-testid="terminal-view"]'
 # xterm.js routes all keystrokes through a hidden helper <textarea>; focusing it
@@ -99,6 +98,10 @@ def _type_into_tui(page: Page, text: str) -> None:
     page.keyboard.press("Enter")
 
 
+@pytest.mark.skipif(
+    not os.environ.get("LLM_API_KEY"),
+    reason="Native Claude render-parity needs real Anthropic credentials (LLM_API_KEY).",
+)
 @pytest.mark.timeout(300)
 def test_native_claude_message_render_parity(
     page: Page,
