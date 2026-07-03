@@ -30,7 +30,7 @@ import {
   executionLogTabKey,
   MAIN_EXECUTION_LOG_KEY,
   MAX_TREE_DEPTH,
-  useChildSessions,
+  useChildSessionCount,
 } from "@/hooks/useChildSessions";
 import { useDebugMode } from "@/hooks/useDebugMode";
 import {
@@ -421,10 +421,7 @@ export function AppShell() {
     // fall back one hop until the walk resolves the true root.
     return activeSession?.parentSessionId ?? conversationId;
   }, [conversationId, activeSession, walkedRoot, queryClient]);
-  // One-shot fetch (no polling) for the Subagents tab's count badge.
-  // SubagentsPanel mounts its own polling usage of the hook against
-  // the same rootSessionId, so the cache is shared.
-  const { children: childSessions } = useChildSessions(rootSessionId);
+  const childSessionCount = useChildSessionCount(rootSessionId);
   // Remember the resolved root so a later click into one of its tree
   // members can hold it steady (see ``rootSessionId`` above).
   useEffect(() => {
@@ -432,12 +429,12 @@ export function AppShell() {
   }, [rootSessionId]);
   // How many children are actively working — surfaced in the tab badge so
   // "something's happening" is visible without opening the panel.
-  const subagentsWorking = childSessions.filter((c) => c.busy).length;
+  const subagentsWorking = childSessionCount.busy;
   // Total agents in the session tree, main agent included — the Agents
   // tab badge starts at 1 for a lone agent and the tab is ALWAYS shown
   // (the panel's "main" row links back to the root, so an empty tree is
   // a one-entry list, not a dead end).
-  const agentCount = childSessions.length + 1;
+  const agentCount = childSessionCount.total + 1;
 
   // Hide the files panel entirely when the agent spec has no os_env. Probe
   // the default environment resource instead of the root filesystem listing:
@@ -844,8 +841,8 @@ export function AppShell() {
         return next;
       });
     },
-    [setSearchParams],
-  ); // eslint-disable-line react-hooks/exhaustive-deps
+    [clearFileViewerUrl, setSearchParams],
+  );
 
   // Switch the workspace rail's tab. The side effect (closing any open
   // file + its comments + URL) lives here, not in WorkspacePanel, so the

@@ -611,6 +611,60 @@ async def test_child_sessions_busy_reflects_relay_status_cache(
         sessions_module._session_status_cache.pop(child.id, None)
 
 
+async def test_child_sessions_count_summarizes_bounded_tree(
+    client: httpx.AsyncClient,
+    db_uri: str,
+) -> None:
+    session = await _create_parent_session(client)
+    conv_store = SqlAlchemyConversationStore(db_uri)
+    child_a = _seed_child(
+        conv_store=conv_store,
+        parent_id=session["id"],
+        title="coordinator:a",
+        agent_id=session["agent_id"],
+    )
+    child_b = _seed_child(
+        conv_store=conv_store,
+        parent_id=session["id"],
+        title="coordinator:b",
+        agent_id=session["agent_id"],
+    )
+    grandchild_a = _seed_child(
+        conv_store=conv_store,
+        parent_id=child_a.id,
+        title="worker:a",
+        agent_id=session["agent_id"],
+    )
+    grandchild_b = _seed_child(
+        conv_store=conv_store,
+        parent_id=child_b.id,
+        title="worker:b",
+        agent_id=session["agent_id"],
+    )
+    great_grandchild = _seed_child(
+        conv_store=conv_store,
+        parent_id=grandchild_a.id,
+        title="worker:deep",
+        agent_id=session["agent_id"],
+    )
+    _seed_child(
+        conv_store=conv_store,
+        parent_id=great_grandchild.id,
+        title="worker:too-deep",
+        agent_id=session["agent_id"],
+    )
+    busy_ids = [grandchild_b.id, great_grandchild.id]
+    for child_id in busy_ids:
+        sessions_module._session_status_cache[child_id] = "running"
+    try:
+        resp = await client.get(f"/v1/sessions/{session['id']}/child_sessions/count")
+        assert resp.status_code == 200
+        assert resp.json() == {"total": 5, "busy": 2}
+    finally:
+        for child_id in busy_ids:
+            sessions_module._session_status_cache.pop(child_id, None)
+
+
 async def test_child_sessions_truncates_long_message_preview(
     client: httpx.AsyncClient,
     db_uri: str,

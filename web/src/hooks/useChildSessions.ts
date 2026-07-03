@@ -157,6 +157,11 @@ interface UseChildSessionsResult {
   error: Error | null;
 }
 
+interface ChildSessionCount {
+  total: number;
+  busy: number;
+}
+
 /**
  * Fetch child sessions for a parent session.
  *
@@ -181,6 +186,14 @@ export async function fetchChildSessions(sessionId: string): Promise<ChildSessio
     last_message_preview: row.last_message_preview ?? null,
     pending_elicitations_count: row.pending_elicitations_count ?? 0,
   }));
+}
+
+async function fetchChildSessionCount(sessionId: string): Promise<ChildSessionCount> {
+  const res = await authenticatedFetch(
+    `/v1/sessions/${encodeURIComponent(sessionId)}/child_sessions/count`,
+  );
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return (await res.json()) as ChildSessionCount;
 }
 
 /**
@@ -220,4 +233,19 @@ export function useChildSessions(
     isLoading,
     error: (error as Error | null) ?? null,
   };
+}
+
+export function useChildSessionCount(conversationId: string | null): ChildSessionCount {
+  const { data } = useQuery({
+    queryKey:
+      conversationId === null
+        ? ["conversation", null, "child_sessions", "count"]
+        : [...childSessionsQueryKey(conversationId), "count"],
+    queryFn: () => fetchChildSessionCount(conversationId as string),
+    enabled: conversationId !== null,
+    staleTime: 60_000,
+    retry: false,
+    refetchOnMount: false,
+  });
+  return data ?? { total: 0, busy: 0 };
 }

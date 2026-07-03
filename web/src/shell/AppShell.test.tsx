@@ -29,12 +29,22 @@ vi.mock("@/hooks/useWorkspaceChangedFiles", () => ({
   useWorkspaceChangedFiles: vi.fn(() => ({ data: undefined, isLoading: true })),
 }));
 
-vi.mock("@/hooks/useChildSessions", async (importOriginal) => ({
-  // Keep the real module (childSessionsQueryKey, MAX_TREE_DEPTH,
-  // cachedTreeContains) — only the hook is replaced.
-  ...(await importOriginal<typeof import("@/hooks/useChildSessions")>()),
-  useChildSessions: vi.fn(() => ({ children: [], isLoading: false, error: null })),
-}));
+vi.mock("@/hooks/useChildSessions", async (importOriginal) => {
+  const useChildSessions = vi.fn(() => ({ children: [], isLoading: false, error: null }));
+  return {
+    // Keep the real module (childSessionsQueryKey, MAX_TREE_DEPTH,
+    // cachedTreeContains) — only the network hooks are replaced.
+    ...(await importOriginal<typeof import("@/hooks/useChildSessions")>()),
+    useChildSessions,
+    useChildSessionCount: vi.fn((id) => {
+      const { children } = useChildSessions(id);
+      return {
+        total: children.length,
+        busy: children.filter((child: { busy: boolean }) => child.busy).length,
+      };
+    }),
+  };
+});
 
 vi.mock("@/hooks/useSession", async (importOriginal) => ({
   // useRootSessionId stays real — with useSession mocked to a null /

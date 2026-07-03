@@ -1978,6 +1978,32 @@ def _session_status_with_child_rollup(
     return own_status
 
 
+def _child_session_counts(
+    root_id: str,
+    conv_store: ConversationStore,
+    max_depth: int = 3,
+) -> dict[str, int]:
+    total = 0
+    busy = 0
+    seen = {root_id}
+    frontier = [root_id]
+    for _ in range(max_depth):
+        children_by_parent = conv_store.list_child_conversation_ids_by_parent(frontier)
+        next_frontier: list[str] = []
+        for child_id in (cid for ids in children_by_parent.values() for cid in ids):
+            if child_id in seen:
+                continue
+            seen.add(child_id)
+            total += 1
+            if _session_status_cache.get(child_id) in ("running", "waiting"):
+                busy += 1
+            next_frontier.append(child_id)
+        if not next_frontier:
+            break
+        frontier = next_frontier
+    return {"total": total, "busy": busy}
+
+
 @dataclass(frozen=True)
 class SessionLiveness:
     """
@@ -16907,6 +16933,25 @@ def create_sessions_router(
         )
 
     # ── GET /sessions/{session_id}/child_sessions ────────────────
+
+    @router.get(
+        "/sessions/{session_id}/child_sessions/count",
+        include_in_schema=False,
+    )
+    async def count_child_sessions(
+        request: Request,
+        session_id: str,
+    ) -> dict[str, int]:
+        """Return bounded sub-agent tree counts for the Agents badge."""
+        user_id = _get_user_id(request, auth_provider)
+        access = await _require_access_and_level(
+            user_id, session_id, LEVEL_READ, permission_store, conversation_store
+        )
+        if access.conversation is None:
+            conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+            if conv is None:
+                raise OmnigentError("Session not found", code=ErrorCode.NOT_FOUND)
+        return await asyncio.to_thread(_child_session_counts, session_id, conversation_store)
 
     @router.get(
         "/sessions/{session_id}/child_sessions",
