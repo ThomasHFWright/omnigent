@@ -54,6 +54,7 @@ import type {
 } from "@/lib/blocks";
 import { BlockStream } from "@/lib/blockStream";
 import { itemsToBlocks } from "@/lib/itemsToBlocks";
+import { emitBrowserActionRequest } from "@/lib/browserActionBus";
 import {
   ApiError,
   approve as approveElicitation,
@@ -3995,6 +3996,11 @@ export function handleSessionEvent(event: StreamEvent): void {
       useChatStore.setState({
         pendingUserMessages: [],
       });
+      return;
+    case "browser_action_request":
+      // Embedded-browser action: fan out to the relay hook (which claims,
+      // executes, posts the result). No store state; no-op without a relay.
+      emitBrowserActionRequest(event);
       return;
     case "session_status": {
       // Captured BEFORE the patch below adopts event.responseId, so a

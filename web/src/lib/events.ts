@@ -830,6 +830,22 @@ export interface SessionSupersededEvent {
   reason: "clear";
 }
 
+/**
+ * `browser.action_request` — the agent's `browser_*` tool asks the desktop shell
+ * to run a browser action against this conversation's WebContentsView. Every
+ * renderer sees the event, but the relay (`useBrowserAgentRelay`) claims it first
+ * so only one executes; non-Electron renderers ignore it.
+ */
+export interface BrowserActionRequestEvent {
+  type: "browser_action_request";
+  /** Server-minted id; echoed on claim + result to resolve the parked Future. */
+  actionId: string;
+  /** The bare verb: "navigate" | "snapshot" | "click" | "type" | "screenshot". */
+  action: string;
+  /** Action-specific args (url, ref, selector, text, …); shape validated per-action. */
+  args: Record<string, unknown>;
+}
+
 // ── Union type for all events ────────────────────────────
 
 export type StreamEvent =
@@ -882,4 +898,5 @@ export type StreamEvent =
   | SessionTerminalActivityEvent
   | SessionSkillsEvent
   | SessionModelOptionsEvent
-  | SessionPresenceEvent;
+  | SessionPresenceEvent
+  | BrowserActionRequestEvent;
