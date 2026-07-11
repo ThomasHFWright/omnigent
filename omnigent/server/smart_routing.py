@@ -161,6 +161,40 @@ async def fetch_runner_models(
     return result or None
 
 
+async def fetch_codex_models_for_effort(
+    session_id: str,
+    runner_client: httpx.AsyncClient,
+    reasoning_effort: str,
+) -> list[str] | None:
+    """Return Codex-native models that advertise *reasoning_effort*."""
+    import httpx as _httpx
+
+    try:
+        resp = await runner_client.get(
+            f"/v1/sessions/{session_id}/codex-model-options", timeout=5.0
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, list) or any(not isinstance(model, dict) for model in models):
+            raise ValueError("malformed Codex model options")
+    except (_httpx.HTTPError, ValueError):
+        return None
+
+    compatible: list[str] = []
+    for model in models:
+        model_id = model.get("id")
+        effort_options = model.get("supportedReasoningEfforts")
+        if not isinstance(effort_options, list):
+            continue
+        efforts = {
+            option.get("reasoningEffort") for option in effort_options if isinstance(option, dict)
+        }
+        if isinstance(model_id, str) and model_id and reasoning_effort in efforts:
+            compatible.append(model_id)
+    return compatible
+
+
 def _flatten_models(available_models: dict[str, list[str]]) -> list[str]:
     """Return a deduped, ordered flat model list from a harness → models map.
 
@@ -332,13 +366,12 @@ async def route_turn(
     *,
     session_id: str | None = None,
     runner_client: httpx.AsyncClient | None = None,
+    reasoning_effort: str | None = None,
 ) -> tuple[str | None, dict[str, Any] | None]:
     """Pick the best model for a turn via :attr:`RuntimeCaps.routing_client`.
 
-    When *session_id* and *runner_client* are provided, fetches live model
-    availability from the runner's ``/v1/sessions/{id}/models`` endpoint.
-    Falls back to the static :func:`infer_models` lookup table if the runner
-    is unreachable or returns no data.
+    Codex-native sessions with an explicit effort use live model capabilities.
+    Other sessions retain the general runner catalog and static fallback.
     """
     try:
         from omnigent.runtime._globals import _caps
@@ -353,7 +386,14 @@ async def route_turn(
     # for brain-turn routing we only want the models this session's own
     # harness can run, not the sub-agents' model lists.
     available: dict[str, list[str]] | None = None
-    if session_id and runner_client is not None:
+    if harness == "codex-native" and reasoning_effort is not None:
+        if session_id is None or runner_client is None:
+            return None, None
+        models = await fetch_codex_models_for_effort(session_id, runner_client, reasoning_effort)
+        if not models:
+            return None, None
+        available = {"self": models}
+    elif session_id and runner_client is not None:
         catalog = await fetch_runner_models(session_id, runner_client)
         if catalog and "self" in catalog:
             available = {"self": catalog["self"]}

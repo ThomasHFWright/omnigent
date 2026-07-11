@@ -6,13 +6,14 @@ from collections.abc import Iterable
 
 from omnigent.llms.errors import PermanentLLMError
 
-EFFORT_VALUES = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
+EFFORT_VALUES = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"})
 EFFORT_CLEAR_VALUES = frozenset({"default", "off", "reset"})
 
 OPENAI_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
 ANTHROPIC_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 CLAUDE_EFFORTS = ANTHROPIC_EFFORTS
 CODEX_EFFORTS = OPENAI_EFFORTS
+CODEX_NATIVE_EFFORTS = OPENAI_EFFORTS | {"max", "ultra"}
 OPENAI_AGENTS_EFFORTS = OPENAI_EFFORTS
 GEMINI_EFFORTS = frozenset({"low", "medium", "high"})
 ANTIGRAVITY_EFFORTS = GEMINI_EFFORTS
@@ -24,7 +25,7 @@ COPILOT_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 
 def format_supported(values: Iterable[str]) -> str:
     """Return a stable comma-separated supported-values string."""
-    order = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+    order = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
     values_set = set(values)
     return ", ".join(value for value in order if value in values_set)
 

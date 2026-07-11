@@ -405,3 +405,55 @@ async def test_route_turn_falls_back_to_static_when_runner_unavailable() -> None
         )
     # Still routes — fell back to static infer_models
     assert model == "databricks-claude-haiku-4-5"
+
+
+@pytest.mark.parametrize(
+    ("effort", "compatible", "unavailable"),
+    [("max", True, False), ("ultra", True, False), ("max", False, False), ("max", False, True)],
+)
+@pytest.mark.asyncio
+async def test_codex_native_routing_respects_effort_capabilities(
+    effort: str, compatible: bool, unavailable: bool
+) -> None:
+    """Codex routing uses live effort support or preserves the current model."""
+    import httpx
+
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    models = [
+        {
+            "id": "gpt-5.5",
+            "supportedReasoningEfforts": [{"reasoningEffort": "xhigh"}],
+        }
+    ]
+    if compatible:
+        models.append(
+            {
+                "id": "gpt-5.6-sol",
+                "supportedReasoningEfforts": [{"reasoningEffort": effort}],
+            }
+        )
+    response.json.return_value = {"models": models}
+    runner = MagicMock()
+    runner.get = AsyncMock(
+        side_effect=httpx.HTTPError("runner down") if unavailable else None,
+        return_value=response,
+    )
+    routing_client = AsyncMock()
+    routing_client.route.return_value = RoutingResult("gpt-5.6-sol", "compatible", "self")
+
+    with patch("omnigent.runtime._globals._caps", new=_FakeCaps(routing_client)):
+        result = await route_turn(
+            "codex-native",
+            "hello",
+            session_id="conv_123",
+            runner_client=runner,
+            reasoning_effort=effort,
+        )
+
+    if compatible and not unavailable:
+        assert result[0] == "gpt-5.6-sol"
+        assert routing_client.route.await_args.args[1] == {"self": ["gpt-5.6-sol"]}
+    else:
+        assert result == (None, None)
+        routing_client.route.assert_not_awaited()

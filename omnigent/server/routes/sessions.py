@@ -8898,6 +8898,7 @@ async def _forward_event_to_runner(
                 _user_text,
                 session_id=session_id,
                 runner_client=runner_client,
+                reasoning_effort=conv.reasoning_effort,
             )
             if _routed_model is not None:
                 effective_runner_override = _routed_model
@@ -9142,6 +9143,7 @@ async def _dispatch_session_event_to_runner(
                     _user_text,
                     session_id=session_id,
                     runner_client=_native_runner_client,
+                    reasoning_effort=conv.reasoning_effort,
                 )
                 if _native_routed_model is not None:
                     try:

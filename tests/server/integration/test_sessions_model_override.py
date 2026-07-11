@@ -11,7 +11,7 @@ runner-path forwarding is verified here by stubbing
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -754,3 +754,41 @@ async def test_smart_routing_overrides_orchestrator_model_for_child_session(
         f"{routed_model!r}; runner body had "
         f"{captured['body'].get('model_override')!r}."
     )
+
+
+async def test_codex_native_routing_receives_persisted_effort(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnigent.server.routes import sessions as sessions_mod
+
+    _stub_runner_client(monkeypatch)
+    ready = sessions_mod._NativeTerminalEnsureOutcome(error=None, policy_notice=None)
+    route = AsyncMock(return_value=(None, None))
+    monkeypatch.setattr(
+        sessions_mod, "_ensure_native_terminal_ready", AsyncMock(return_value=ready)
+    )
+    monkeypatch.setattr("omnigent.server.smart_routing.route_turn", route)
+
+    agent = await create_test_agent(client)
+    created = await client.post(
+        "/v1/sessions",
+        json={
+            "agent_id": agent["id"],
+            "harness_override": "codex-native",
+            "cost_control_mode_override": "on",
+            "reasoning_effort": "ultra",
+        },
+    )
+    await client.post(
+        f"/v1/sessions/{created.json()['id']}/events",
+        json={
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            },
+        },
+    )
+
+    assert route.await_args.kwargs["reasoning_effort"] == "ultra"

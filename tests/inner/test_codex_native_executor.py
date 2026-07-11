@@ -695,9 +695,11 @@ def _run_turn_with_config(
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("effort", ["high", "max", "ultra"])
 def test_web_model_pick_applied_via_thread_settings_update(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    effort: str,
 ) -> None:
     """
     A web-picker model + reasoning effort apply via ``thread/settings/update``.
@@ -723,7 +725,7 @@ def test_web_model_pick_applied_via_thread_settings_update(
     _run_turn_with_config(
         executor,
         "hello",
-        ExecutorConfig(model="gpt-5.3-codex", extra={"reasoning_effort": "high"}),
+        ExecutorConfig(model="gpt-5.3-codex", extra={"reasoning_effort": effort}),
     )
 
     assert _FakeCodexNativeClient.requests == [
@@ -732,7 +734,7 @@ def test_web_model_pick_applied_via_thread_settings_update(
             {
                 "threadId": "thread_123",
                 "model": "gpt-5.3-codex",
-                "effort": "high",
+                "effort": effort,
             },
         ),
         (
