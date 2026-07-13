@@ -81,6 +81,7 @@ A profile's `transport` is a harness-family marker. The resolved driver is:
 | Probe | What it verifies | Priority |
 | --- | --- | --- |
 | **Basic turn** | A turn completes and returns assistant text. | P0 |
+| **Fork replay** | A cloned session copies the source history and can use it on its first turn. | P1 |
 | **Streaming** | More than one output-text delta is emitted; a repeated single delta is `PARTIAL`. | P0 |
 | **Tool calling** | A tool call is surfaced and the turn closes after its result. | P0 |
 | **Omnigent MCP** | A native harness calls the read-only `sys_session_list` relay tool through its generated `omnigent` MCP server. | P1 |
@@ -101,6 +102,7 @@ transport; it does not claim the harness lacks the capability.
 | Dimension | `full-server` | `native-tui` | `sdk-inproc` (`--fast`) |
 | --- | --- | --- | --- |
 | Basic turn, Streaming, Model override, Interrupt | End-to-end through server + runner | End-to-end through server + runner + vendor CLI | Wrap boundary only |
+| Fork replay | Clone + copied-history replay through server + runner | Clone + copied-history replay through server + runner + vendor CLI | Not observable |
 | Tool calling | Server-dispatched builtin | Vendor tool mirrored as a session item | Request-level wrap tool |
 | Omnigent MCP | Not applicable | Generated `omnigent` MCP relay when supported by the vendor | Not applicable |
 | Policy DENY | Fixed policy in the agent spec | Session CEL policy + native policy hook | Not observable |
@@ -161,5 +163,5 @@ inside drivers so probes remain harness-agnostic.
   the harness registry, which limits community-native end-to-end execution.
 - Some native harnesses require vendor login/provider setup that the bench
   cannot provision and therefore skip cleanly.
-- Steering, live queue, resume/fork, reasoning, images, and compaction do not
+- Steering, live queue, resume, reasoning, images, and compaction do not
   yet have probes.

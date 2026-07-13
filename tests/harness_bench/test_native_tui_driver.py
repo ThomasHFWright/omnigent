@@ -90,21 +90,30 @@ class _FakeClient:
         self.deleted_policies: list[str] = []
         self.posted_events: list[dict] = []
         self._items_calls = 0
+        self.patched_sessions: list[tuple[str, dict]] = []
 
     def get(self, url: str, params: dict | None = None, timeout: float | None = None):
         if url.endswith("/items"):
+            if "/conv_fork/" in url:
+                return _FakeResponse(200, {"data": self._items})
             self._items_calls += 1
             data = [] if self._items_calls == 1 else self._items
             return _FakeResponse(200, {"data": data})
         return _FakeResponse(200, {})
 
     def post(self, url: str, json: dict | None = None, timeout: float | None = None):
+        if url.endswith("/fork"):
+            return _FakeResponse(201, {"id": "conv_fork"})
         if url.endswith("/policies"):
             self.attached_policies.append(json or {})
             return _FakeResponse(self._policy_status, {"id": "spol_test"})
         if url.endswith("/events"):
             self.posted_events.append(json or {})
         return _FakeResponse(202, {})
+
+    def patch(self, url: str, json: dict | None = None):
+        self.patched_sessions.append((url, json or {}))
+        return _FakeResponse(200, {})
 
     def delete(self, url: str, timeout: float | None = None):
         self.deleted_policies.append(url.rsplit("/", 1)[-1])
@@ -364,6 +373,37 @@ def test_mcp_tool_turn_skips_non_mcp_native_relay() -> None:
 
     assert result.error and "no Omnigent MCP bridge" in result.error
     assert client.posted_events == []
+
+
+def test_fork_turn_binds_clone_and_replays_copied_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = "FORK_MARKER"
+    copied_message = {
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": marker}],
+        },
+    }
+    client = _FakeClient(items=[copied_message])
+    driver = _driver_with_fake("claude-native", client)
+    driver._runner_id = "runner_test"
+    seen_session_ids: list[str | None] = []
+
+    def _recall(prompt: str) -> TurnResult:
+        assert marker not in prompt
+        seen_session_ids.append(driver._session_id)
+        return TurnResult(completed=True, text=marker)
+
+    monkeypatch.setattr(driver, "_drive_turn", _recall)
+
+    result = driver._drive_fork_turn(marker)
+
+    assert result.created and result.history_copied and result.recalled
+    assert seen_session_ids == ["conv_fork"]
+    assert client.patched_sessions == [("/v1/sessions/conv_fork", {"runner_id": "runner_test"})]
+    assert driver._session_id == "conv_fork"
 
 
 async def test_probes_read_native_tool_result_as_supported() -> None:
