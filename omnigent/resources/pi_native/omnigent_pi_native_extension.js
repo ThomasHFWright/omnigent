@@ -1107,6 +1107,8 @@ module.exports = function (pi) {
   // edge's response_id matches the ``running`` edge that opened the turn; a
   // fresh id per edge would leave the composer stuck in "queued" until a tab
   // switch resets the store. Minted on agent_start, reused on agent_end.
+  // Must be separate from activeResponseId — turn_start overwrites that with a
+  // turn-level id between agent_start and agent_end.
   let turnStatusResponseId = null;
   // Dedicated loop-state flag, set on agent_start / cleared on agent_end. Used
   // as the no-isIdle() fallback for requestInterrupt instead of
@@ -1561,6 +1563,10 @@ module.exports = function (pi) {
     streamedTextIndex.clear();
     finalizedTextBlocks.clear();
     streamingMessageOrdinal = 0;
+    // Pin the response_id for this agent loop. agent_end MUST emit the same id
+    // so the web client can match the idle edge to the running edge and clear
+    // the "streaming" status — which unblocks queued follow-up messages.
+    // Use a dedicated variable: activeResponseId is overwritten by turn_start.
     turnStatusResponseId = `pi-${Date.now()}-${++sequence}`;
     await postEvent(config, {
       type: "external_session_status",
@@ -1589,17 +1595,14 @@ module.exports = function (pi) {
       if (accumulateUsage(message)) changed = true;
     }
     if (changed) await postSessionUsage();
+    // Reuse the agent_start response_id so the web client matches the idle
+    // edge and clears the "streaming" status, unblocking queued follow-ups.
+    const endResponseId = turnStatusResponseId ?? `pi-${Date.now()}-${++sequence}`;
+    turnStatusResponseId = null;
     await postEvent(config, {
       type: "external_session_status",
-      data: {
-        status: "idle",
-        // Reuse the running edge's id so the web store's idle-clear matches
-        // and drops the "streaming" flag. Fall back to a fresh id if this
-        // idle somehow lands without a preceding agent_start.
-        response_id: turnStatusResponseId ?? `pi-${Date.now()}-${++sequence}`,
-      },
+      data: { status: "idle", response_id: endResponseId },
     });
-    turnStatusResponseId = null;
   });
 
   pi.on("turn_start", async (event, ctx) => {
