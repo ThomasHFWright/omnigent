@@ -4233,6 +4233,28 @@ export function handleSessionEvent(event: StreamEvent): void {
             patch.pendingUserMessages = [];
           }
         }
+        // Surface the error inline when the harness reports a terminal failure
+        // with a structured error payload (e.g. token expiration on startup).
+        // `response.failed` / `response.error` handle mid-turn failures, but
+        // startup failures only emit `session.status: failed` — nothing
+        // converts that into a visible ErrorBlock. Synthesize one here so the
+        // user sees the message without having to reload.
+        if (
+          event.status === "failed" &&
+          event.error != null &&
+          !s.blocks.some((b) => b.type === "error")
+        ) {
+          patch.blocks = [
+            ...s.blocks,
+            {
+              type: "error",
+              ctx: { agent: null, depth: 0, turn: 0, timestamp: 0, responseId: "", itemId: null },
+              message: event.error.message,
+              source: "",
+              code: event.error.code,
+            } satisfies ErrorBlock,
+          ];
+        }
         return patch;
       });
       // Refetch the snapshot at turn START too: the runner persists

@@ -451,6 +451,8 @@ export interface SessionStatusEvent {
   status: "idle" | "launching" | "running" | "waiting" | "failed";
   responseId?: string;
   backgroundTaskCount?: number;
+  /** Structured failure detail; only present when `status === "failed"`. */
+  error?: { code: string; message: string };
 }
 
 /**

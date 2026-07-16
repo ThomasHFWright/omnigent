@@ -430,12 +430,24 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
         typeof data.background_task_count === "number" && data.background_task_count >= 0
           ? data.background_task_count
           : undefined;
+      const rawError = data.error;
+      const error =
+        rawError != null &&
+        typeof rawError === "object" &&
+        typeof (rawError as Record<string, unknown>).code === "string" &&
+        typeof (rawError as Record<string, unknown>).message === "string"
+          ? {
+              code: (rawError as Record<string, unknown>).code as string,
+              message: (rawError as Record<string, unknown>).message as string,
+            }
+          : undefined;
       return {
         type: "session_status",
         conversationId,
         status,
         responseId,
         backgroundTaskCount,
+        ...(error !== undefined ? { error } : {}),
       } satisfies SessionStatusEvent;
     }
     return null;
