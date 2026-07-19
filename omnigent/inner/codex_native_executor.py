@@ -32,7 +32,7 @@ from omnigent.inner.executor import (
     TurnComplete,
 )
 from omnigent.inner.native_attachments import materialize_attachment, parse_data_uri
-from omnigent.reasoning_effort import CODEX_EFFORTS, validate_effort
+from omnigent.reasoning_effort import CODEX_NATIVE_EFFORTS, validate_effort
 
 _logger = logging.getLogger(__name__)
 
@@ -333,7 +333,7 @@ def _model_effort_overrides(config: ExecutorConfig | None) -> dict[str, Any]:
         overrides["model"] = model
     raw_effort = config.extra.get("reasoning_effort")
     try:
-        effort = validate_effort(raw_effort, "codex", CODEX_EFFORTS)
+        effort = validate_effort(raw_effort, "codex", CODEX_NATIVE_EFFORTS)
     except ValueError:
         # A bad effort must not sink the turn — drop it and keep Codex's
         # current effort rather than failing the whole dispatch.
