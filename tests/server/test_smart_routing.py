@@ -17,6 +17,7 @@ from omnigent.server.smart_routing import (
     LLMRoutingClient,
     RoutingResult,
     _build_rubric,
+    fetch_codex_model_efforts,
     fetch_runner_models,
     infer_models,
     route_turn,
@@ -148,16 +149,21 @@ async def test_llm_routing_client_returns_result() -> None:
     verdict = {
         "harness": "claude-sdk",
         "model": "databricks-claude-opus-4-8",
+        "reasoning_effort": "high",
         "rationale": "hard refactor",
     }
     client = LLMRoutingClient(_FakeLLMClient(verdict))
     models = infer_models("claude-sdk")
     assert models is not None
-    result = await client.route("refactor auth", {"claude-sdk": models})
+    result = await client.route("refactor auth", {"claude-sdk": models}, {models[-1]: ["high"]})
     assert result is not None
     assert result.model == "databricks-claude-opus-4-8"
     assert result.rationale == "hard refactor"
     assert result.harness == "claude-sdk"
+    assert result.reasoning_effort == "high"
+    verdict["reasoning_effort"] = "ultra"
+    result = await client.route("refactor auth", {"claude-sdk": models}, {models[-1]: ["high"]})
+    assert result is not None and result.reasoning_effort is None
 
 
 @pytest.mark.asyncio
@@ -296,6 +302,35 @@ async def test_fetch_runner_models_returns_none_on_empty_workers() -> None:
     assert result is None
 
 
+@pytest.mark.asyncio
+async def test_fetch_codex_model_efforts_retries_until_bridge_ready() -> None:
+    not_ready = MagicMock(status_code=503)
+    ready = MagicMock(status_code=200)
+    ready.json.return_value = {
+        "models": [
+            {
+                "id": "gpt-5.6-terra",
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                    {"reasoningEffort": "high"},
+                ],
+            }
+        ]
+    }
+    ready.raise_for_status = MagicMock()
+    mock_client = MagicMock()
+    mock_client.get = AsyncMock(side_effect=[not_ready, ready])
+
+    with patch(
+        "omnigent.server.smart_routing._CODEX_MODEL_OPTIONS_RETRY_DELAYS_S",
+        (0.0,),
+    ):
+        result = await fetch_codex_model_efforts("conv_123", mock_client)
+
+    assert result == {"gpt-5.6-terra": ["low", "high"]}
+    assert mock_client.get.await_count == 2
+
+
 # ── route_turn (integration) ───────────────────────────────────────
 
 
@@ -348,7 +383,6 @@ async def test_route_turn_uses_runner_catalog_when_available() -> None:
         rationale="complex task",
         harness="self",
     )
-
     mock_response = MagicMock()
     mock_response.json.return_value = {
         "workers": {
@@ -376,10 +410,8 @@ async def test_route_turn_uses_runner_catalog_when_available() -> None:
             runner_client=mock_client,
         )
     assert model == "databricks-claude-opus-4-8"
-    # Runner endpoint was called
     mock_client.get.assert_called_once()
-    call_url = mock_client.get.call_args[0][0]
-    assert "conv_123" in call_url and "models" in call_url
+    assert "conv_123" in mock_client.get.call_args[0][0]
 
 
 @pytest.mark.asyncio

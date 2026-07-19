@@ -59,6 +59,8 @@ def _patch_session_as_claude_native(
             payload = dict(latest_payload or {})
             if "model_override" in request_body:
                 payload["model_override"] = request_body["model_override"]
+            if "cost_control_mode_override" in request_body:
+                payload["cost_control_mode_override"] = request_body["cost_control_mode_override"]
         else:
             route.continue_()
             return
@@ -179,3 +181,29 @@ def test_claude_native_picker_prefers_session_override_over_sticky_model(
     expect(
         page.locator('[data-testid="model-picker-item"][data-model-id="sonnet"]')
     ).not_to_have_attribute("data-active", "true")
+
+
+def test_smart_routing_clears_native_model_and_effort(
+    page: Page,
+    seeded_session: tuple[str, str],
+) -> None:
+    """Enabling routing clears both manual native controls in one PATCH."""
+    base_url, session_id = seeded_session
+    patch_bodies = _patch_session_as_claude_native(page, session_id, model_override="opus")
+
+    def enable_smart_routing(route: Route) -> None:
+        response = route.fetch()
+        payload = response.json()
+        payload["smart_routing_enabled"] = True
+        route.fulfill(status=200, headers=response.headers, body=json.dumps(payload))
+
+    page.route("**/v1/info", enable_smart_routing)
+    page.goto(f"{base_url}/c/{session_id}")
+    page.get_by_test_id("cost-toggle-trigger").click()
+
+    expect(page.get_by_test_id("cost-toggle-trigger")).to_have_attribute("data-mode", "on")
+    assert patch_bodies[-1] == {
+        "cost_control_mode_override": "on",
+        "model_override": "default",
+        "reasoning_effort": "default",
+    }

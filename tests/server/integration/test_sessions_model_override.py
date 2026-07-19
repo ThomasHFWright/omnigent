@@ -705,7 +705,7 @@ async def test_smart_routing_overrides_orchestrator_model_for_child_session(
     routed_model = "databricks-claude-haiku-4-5"
 
     async def _fake_route_turn(*_: Any, **__: Any) -> tuple[str, dict[str, Any]]:
-        return routed_model, {"rationale": "trivial task — cheap model suffices"}
+        return routed_model, {"reasoning_effort": "high", "rationale": "trivial task"}
 
     # Patch the module where route_turn is defined so the lazy import inside
     # _forward_event_to_runner picks up the stub.
@@ -754,3 +754,5 @@ async def test_smart_routing_overrides_orchestrator_model_for_child_session(
         f"{routed_model!r}; runner body had "
         f"{captured['body'].get('model_override')!r}."
     )
+    assert captured["body"].get("reasoning") == {"effort": "high"}
+    assert (await client.get(f"/v1/sessions/{child_id}")).json()["reasoning_effort"] == "high"
