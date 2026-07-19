@@ -9527,6 +9527,7 @@ async def _forward_event_to_runner(
             )
             if _routed_model is not None:
                 effective_runner_override = _routed_model
+                _routed_effort = (_verdict or {}).get("reasoning_effort")
                 # Persist as the session's model_override so all
                 # subsequent turns use this model automatically.
                 try:
@@ -9534,6 +9535,16 @@ async def _forward_event_to_runner(
                         conversation_store.update_conversation,
                         session_id,
                         model_override=_routed_model,
+                        reasoning_effort=_routed_effort,
+                        _unset_reasoning_effort=_routed_effort is None,
+                    )
+                    session_stream.publish(
+                        session_id,
+                        {
+                            "type": "session.reasoning_effort",
+                            "conversation_id": session_id,
+                            "reasoning_effort": _routed_effort,
+                        },
                     )
                 except (OSError, ValueError):
                     _logger.warning(
@@ -9545,6 +9556,9 @@ async def _forward_event_to_runner(
     # ────────────────────────────────────────────────────────────────
     if effective_runner_override is not None:
         runner_body["model_override"] = effective_runner_override
+    effort = (_verdict or {}).get("reasoning_effort") if _routed_model else conv.reasoning_effort
+    if effort is not None:
+        runner_body["reasoning"] = {"effort": effort}
     # Per-session brain-harness override — create-time only, so no
     # per-event value exists; the persisted column is the source.
     if conv.harness_override is not None:
@@ -9774,11 +9788,22 @@ async def _dispatch_session_event_to_runner(
                     runner_client=_native_runner_client,
                 )
                 if _native_routed_model is not None:
+                    _native_routed_effort = (_native_verdict or {}).get("reasoning_effort")
                     try:
                         await asyncio.to_thread(
                             conversation_store.update_conversation,
                             session_id,
                             model_override=_native_routed_model,
+                            reasoning_effort=_native_routed_effort,
+                            _unset_reasoning_effort=_native_routed_effort is None,
+                        )
+                        session_stream.publish(
+                            session_id,
+                            {
+                                "type": "session.reasoning_effort",
+                                "conversation_id": session_id,
+                                "reasoning_effort": _native_routed_effort,
+                            },
                         )
                     except (OSError, ValueError):
                         _logger.warning(
@@ -9800,6 +9825,12 @@ async def _dispatch_session_event_to_runner(
                             "smart_routing: model_change forward failed for session=%s "
                             "(runner may not support it yet)",
                             session_id,
+                        )
+                    with contextlib.suppress(httpx.HTTPError):
+                        await runner_client.post(
+                            f"/v1/sessions/{session_id}/events",
+                            json={"type": "effort_change", "effort": _native_routed_effort},
+                            timeout=5.0,
                         )
         # ────────────────────────────────────────────────────────────
         forwarded = False
